@@ -3,7 +3,7 @@ import argparse,importlib.metadata,json,subprocess,sys
 from pathlib import Path
 
 def verify():
-    if sys.version_info[:2] not in ((3,11),(3,12)):raise RuntimeError('Use Python 3.11/3.12 (e.g. Colab runtime 2026.07). Do not replace a running interpreter in place.')
+    if sys.version_info[:2] not in ((3,11),(3,12),(3,13)):raise RuntimeError('Use Python 3.11/3.12 (e.g. Colab runtime 2026.07). Do not replace a running interpreter in place.')
     try:import torch,numpy,matplotlib
     except ImportError as error:raise RuntimeError('Select a supported Colab runtime with PyTorch, NumPy and Matplotlib installed. Setup preserves the runtime CUDA stack and does not install/replace PyTorch.') from error
     from packaging.version import Version
