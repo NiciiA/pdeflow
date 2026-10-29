@@ -1,0 +1,65 @@
+@import "tailwindcss";
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: #fff;
+  --color-secondary: #edf2f3;
+  --color-secondary-foreground: #334754;
+  --color-muted: #f3f5f6;
+  --color-muted-foreground: #667984;
+  --color-accent: #e9f1ef;
+  --color-accent-foreground: #174d48;
+  --color-destructive: #b23930;
+  --color-border: #dce3e6;
+  --color-input: #d1dce0;
+  --color-ring: #16867d;
+  --color-popover: #fff;
+  --color-popover-foreground: #1b303d;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 9px;
+  --radius-xl: 12px;
+}
+:root {
+  --background: #f5f7f8;
+  --foreground: #213744;
+  --card: #fff;
+  --primary: #14796f;
+  --radius: 8px;
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  color: var(--foreground);
+  background: var(--background);
+  font-synthesis: none;
+}
+* {
+  border-color: #dce3e6;
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+button,
+a,
+input,
+select,
+textarea {
+  outline-offset: 3px;
+}
+button,
+a {
+  touch-action: manipulation;
+}

@@ -1,0 +1,6 @@
+{
+  "count": 5,
+  "noise_std": 0.03,
+  "pattern": "fixed_sensors",
+  "seed": 54
+}

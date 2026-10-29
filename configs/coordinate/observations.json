@@ -1,0 +1,9 @@
+{
+  "pattern": "fixed_sensors",
+  "count": 6,
+  "fields": ["u"],
+  "time_indices": [0, 1, 2, 3],
+  "seed": 54,
+  "noise_std": 0.03,
+  "noise_mode": "absolute"
+}

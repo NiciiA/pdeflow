@@ -1,0 +1,114 @@
+{
+  "grid": {
+    "shape": [
+      8,
+      8,
+      8
+    ],
+    "domain": {
+      "lengths": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "origins": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "boundary": "periodic",
+      "geometry": "cartesian"
+    },
+    "times": [
+      0.0,
+      0.05,
+      0.1,
+      0.15
+    ],
+    "convention": "periodic_nodes_endpoint_excluded",
+    "temporal_kind": "transient"
+  },
+  "runtime": {
+    "device": "cpu",
+    "dtype": "float32",
+    "precision": "full",
+    "threads": 2
+  },
+  "data": {
+    "count": 18,
+    "seed": 11,
+    "diffusivity_range": [
+      0.03,
+      0.12
+    ],
+    "bandwidth": 1.2,
+    "storage": "npz",
+    "split_counts": null,
+    "shard_size": 32,
+    "storage_dtype": "float64",
+    "bandwidth_range": null,
+    "amplitude_range": [
+      1.0,
+      1.0
+    ],
+    "offset_range": [
+      0.0,
+      0.0
+    ]
+  },
+  "model": {
+    "width": 8,
+    "blocks": 1,
+    "name": "residual_cnn"
+  },
+  "training": {
+    "steps": 20,
+    "batch_size": 2,
+    "learning_rate": 0.002,
+    "seed": 23,
+    "checkpoint_every": 5,
+    "optimizer": "adam"
+  },
+  "inference": {
+    "steps": 8,
+    "stepper": "heun",
+    "schedule": "uniform",
+    "particles": 16,
+    "sensors": 20,
+    "noise_std": 0.03,
+    "noise_floor": 0.1,
+    "seed": 37,
+    "observation_strength": 0.3,
+    "physics_strength": 0.001,
+    "correction_strength": 1.0,
+    "gradient_max_norm": 10.0,
+    "basis_degree": 1,
+    "ridge": 0.001,
+    "controller": {
+      "max_particles": 16,
+      "max_network_evaluations": 256,
+      "max_sampling_steps": 8
+    },
+    "fk": {
+      "dynamics": "linear_cfm_score_sde",
+      "stepper": "euler_maruyama",
+      "noise_schedule": "linear_vanish",
+      "kappa": 0.2,
+      "potential": "annealed_difference",
+      "beta_start": 0.0,
+      "resampler": "systematic",
+      "resample_every": 2,
+      "ess_fraction": 0.7,
+      "terminal_resample": false,
+      "chunk_size": 8,
+      "observation_weight": 0.001,
+      "physics_weight": 0.0001,
+      "observation_convention": "gaussian_sum",
+      "max_particle_evaluations": 4096
+    }
+  },
+  "formulation": "independent_gaussian_linear_cfm",
+  "specialist": "heat",
+  "provider": null,
+  "chemistry": null
+}

@@ -1,0 +1,67 @@
+{
+  "grid": {
+    "shape": [
+      8,
+      8
+    ],
+    "domain": {
+      "lengths": [
+        1.0,
+        1.0
+      ],
+      "boundary": "periodic",
+      "geometry": "cartesian"
+    },
+    "times": [
+      0.0,
+      0.05,
+      0.1,
+      0.15
+    ]
+  },
+  "runtime": {
+    "device": "cpu",
+    "dtype": "float32",
+    "precision": "full",
+    "threads": 2
+  },
+  "data": {
+    "count": 30,
+    "seed": 11,
+    "diffusivity_range": [
+      0.03,
+      0.12
+    ],
+    "bandwidth": 1.2
+  },
+  "model": {
+    "width": 12,
+    "blocks": 2,
+    "name": "residual_cnn"
+  },
+  "training": {
+    "steps": 30,
+    "batch_size": 4,
+    "learning_rate": 0.002,
+    "seed": 23,
+    "checkpoint_every": 10,
+    "optimizer": "adam"
+  },
+  "inference": {
+    "steps": 12,
+    "stepper": "heun",
+    "schedule": "uniform",
+    "particles": 2,
+    "sensors": 10,
+    "noise_std": 0.03,
+    "noise_floor": 0.1,
+    "seed": 37,
+    "observation_strength": 0.3,
+    "physics_strength": 0.001,
+    "correction_strength": 1.0,
+    "gradient_max_norm": 10.0,
+    "basis_degree": 1,
+    "ridge": 0.001
+  },
+  "formulation": "independent_gaussian_linear_cfm"
+}

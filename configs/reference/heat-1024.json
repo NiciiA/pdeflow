@@ -1,0 +1,95 @@
+{
+  "accuracy": null,
+  "inputs": {
+    "initial_u": {
+      "fourier": {
+        "modes": [
+          {
+            "amplitude": 0.6,
+            "phase": 0.0,
+            "wave": [
+              1,
+              1
+            ]
+          }
+        ],
+        "offset": 0.2
+      }
+    }
+  },
+  "request": {
+    "boundary": {
+      "details": "Opposite sides connect",
+      "status": "known",
+      "type": "periodic"
+    },
+    "declarations": [
+      {
+        "kind": "field",
+        "meaning": "signed scalar diffusion field",
+        "name": "u",
+        "rank": 0,
+        "status": "unknown",
+        "units": "nondimensional",
+        "value": null
+      },
+      {
+        "kind": "parameter",
+        "meaning": "positive diffusivity",
+        "name": "D",
+        "rank": 0,
+        "status": "known",
+        "units": "nondimensional",
+        "value": 0.07
+      }
+    ],
+    "domain": {
+      "convention": "periodic_nodes_endpoint_excluded",
+      "domain": {
+        "boundary": "periodic",
+        "geometry": "cartesian",
+        "lengths": [
+          1.0,
+          1.0
+        ],
+        "origins": [
+          0.0,
+          0.0
+        ]
+      },
+      "shape": [
+        1024,
+        1024
+      ],
+      "temporal_kind": "transient",
+      "times": [
+        0.0,
+        0.05,
+        0.1
+      ]
+    },
+    "equations": [
+      "\\frac{\\partial u}{\\partial \\tau}=D\\Delta u"
+    ],
+    "initial": {
+      "details": "Inverse targets; full reference inputs are separate",
+      "status": "unknown"
+    },
+    "measurements": {
+      "noise_model": "independent_gaussian",
+      "noise_std": 0.03,
+      "rows": [],
+      "status": "unknown"
+    },
+    "observation_operator": {
+      "details": "Exact saved nodes/times",
+      "kind": "point_on_grid",
+      "status": "known"
+    },
+    "preset": "heat",
+    "schema_version": 1,
+    "units": "nondimensional"
+  },
+  "seed": 53,
+  "solver": "auto"
+}

@@ -1,0 +1,43 @@
+{
+  "dimension": 2,
+  "reference_shape": [
+    8,
+    8
+  ],
+  "times": [
+    0,
+    0.05,
+    0.1,
+    0.15
+  ],
+  "lengths": [
+    1,
+    1
+  ],
+  "origins": [
+    0,
+    0
+  ],
+  "width": 24,
+  "heads": 4,
+  "tokens": 8,
+  "layers": 1,
+  "train_count": 8,
+  "validation_count": 2,
+  "test_count": 2,
+  "encoder_points": 128,
+  "query_points": 128,
+  "ae_steps": 4,
+  "flow_steps": 4,
+  "checkpoint_every": 2,
+  "observation_counts": [
+    0,
+    16
+  ],
+  "batch_size": 2,
+  "runtime": {
+    "device": "cpu",
+    "dtype": "float32",
+    "threads": 2
+  }
+}

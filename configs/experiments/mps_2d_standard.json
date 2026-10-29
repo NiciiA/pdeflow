@@ -1,0 +1,89 @@
+{
+  "grid": {
+    "shape": [
+      32,
+      32
+    ],
+    "domain": {
+      "lengths": [
+        1,
+        1
+      ],
+      "boundary": "periodic",
+      "geometry": "cartesian"
+    },
+    "times": [
+      0,
+      0.01,
+      0.03,
+      0.06,
+      0.1,
+      0.15
+    ]
+  },
+  "runtime": {
+    "device": "mps",
+    "dtype": "float32",
+    "precision": "full",
+    "threads": 2
+  },
+  "data": {
+    "count": 12000,
+    "seed": 11,
+    "diffusivity_range": [
+      0.03,
+      0.12
+    ],
+    "bandwidth": 1.2,
+    "storage": "sharded_npz",
+    "split_counts": [
+      10000,
+      1000,
+      1000
+    ],
+    "shard_size": 32,
+    "storage_dtype": "float32",
+    "bandwidth_range": [
+      0.6,
+      2.4
+    ],
+    "amplitude_range": [
+      0.3,
+      2.0
+    ],
+    "offset_range": [
+      -1,
+      1
+    ]
+  },
+  "model": {
+    "width": 32,
+    "blocks": 3,
+    "name": "residual_cnn"
+  },
+  "training": {
+    "steps": 20000,
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "seed": 23,
+    "checkpoint_every": 100,
+    "optimizer": "adam"
+  },
+  "inference": {
+    "steps": 24,
+    "stepper": "heun",
+    "schedule": "uniform",
+    "particles": 4,
+    "sensors": 20,
+    "noise_std": 0.03,
+    "noise_floor": 0.1,
+    "seed": 37,
+    "observation_strength": 0.3,
+    "physics_strength": 0.001,
+    "correction_strength": 1.0,
+    "gradient_max_norm": 10.0,
+    "basis_degree": 1,
+    "ridge": 0.001
+  },
+  "formulation": "independent_gaussian_linear_cfm"
+}

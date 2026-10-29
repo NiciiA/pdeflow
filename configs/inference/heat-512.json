@@ -1,0 +1,15 @@
+{
+  "steps": 12,
+  "particles": 1,
+  "stepper": "heun",
+  "schedule": "uniform",
+  "seed": 37,
+  "observation_strength": 0.3,
+  "physics_strength": 0.001,
+  "controller": null,
+  "snapshots": {
+    "max_frames": 5,
+    "max_particles": 1,
+    "max_side": 64
+  }
+}

@@ -1,0 +1,154 @@
+{
+  "accuracy": null,
+  "inputs": {
+    "initial_a": {
+      "expression": ".3+.1*cos(2*pi*x)"
+    },
+    "initial_b": {
+      "expression": ".4+.1*sin(2*pi*x)"
+    },
+    "initial_c": 0.1
+  },
+  "request": {
+    "boundary": {
+      "details": "Opposite sides connect",
+      "status": "known",
+      "type": "periodic"
+    },
+    "declarations": [
+      {
+        "kind": "field",
+        "meaning": "species A concentration (nonnegative)",
+        "name": "a",
+        "rank": 0,
+        "status": "unknown",
+        "units": "nondimensional",
+        "value": null
+      },
+      {
+        "kind": "field",
+        "meaning": "species B concentration (nonnegative)",
+        "name": "b",
+        "rank": 0,
+        "status": "unknown",
+        "units": "nondimensional",
+        "value": null
+      },
+      {
+        "kind": "field",
+        "meaning": "species C concentration (nonnegative)",
+        "name": "c",
+        "rank": 0,
+        "status": "unknown",
+        "units": "nondimensional",
+        "value": null
+      },
+      {
+        "kind": "parameter",
+        "meaning": "positive diffusivity of A",
+        "name": "D_A",
+        "rank": 0,
+        "status": "known",
+        "units": "nondimensional",
+        "value": 0.01
+      },
+      {
+        "kind": "parameter",
+        "meaning": "positive diffusivity of B",
+        "name": "D_B",
+        "rank": 0,
+        "status": "known",
+        "units": "nondimensional",
+        "value": 0.01
+      },
+      {
+        "kind": "parameter",
+        "meaning": "positive diffusivity of C",
+        "name": "D_C",
+        "rank": 0,
+        "status": "known",
+        "units": "nondimensional",
+        "value": 0.01
+      },
+      {
+        "kind": "parameter",
+        "meaning": "positive forward mass-action rate",
+        "name": "k_f",
+        "rank": 0,
+        "status": "known",
+        "units": "nondimensional",
+        "value": 1
+      },
+      {
+        "kind": "parameter",
+        "meaning": "positive reverse mass-action rate",
+        "name": "k_r",
+        "rank": 0,
+        "status": "known",
+        "units": "nondimensional",
+        "value": 1
+      },
+      {
+        "kind": "definition",
+        "meaning": "derived net reaction rate k_f a b - k_r c",
+        "name": "r",
+        "rank": 0,
+        "status": "known",
+        "units": "nondimensional",
+        "value": null
+      }
+    ],
+    "domain": {
+      "convention": "periodic_nodes_endpoint_excluded",
+      "domain": {
+        "boundary": "periodic",
+        "geometry": "cartesian",
+        "lengths": [
+          1.0,
+          1.0
+        ],
+        "origins": [
+          0.0,
+          0.0
+        ]
+      },
+      "shape": [
+        8,
+        8
+      ],
+      "temporal_kind": "transient",
+      "times": [
+        0.0,
+        0.05,
+        0.1,
+        0.15
+      ]
+    },
+    "equations": [
+      "\\partial_\\tau a=D_A\\Delta a-r",
+      "\\partial_\\tau b=D_B\\Delta b-r",
+      "\\partial_\\tau c=D_C\\Delta c+r",
+      "r=k_f a b-k_r c"
+    ],
+    "initial": {
+      "details": "Inverse targets; full reference inputs are separate",
+      "status": "unknown"
+    },
+    "measurements": {
+      "noise_model": "independent_gaussian",
+      "noise_std": 0.03,
+      "rows": [],
+      "status": "unknown"
+    },
+    "observation_operator": {
+      "details": "Exact saved nodes/times",
+      "kind": "point_on_grid",
+      "status": "known"
+    },
+    "preset": "chemistry",
+    "schema_version": 1,
+    "units": "nondimensional"
+  },
+  "seed": 53,
+  "solver": "auto"
+}

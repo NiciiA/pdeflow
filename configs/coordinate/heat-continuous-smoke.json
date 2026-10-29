@@ -1,0 +1,80 @@
+{
+  "dimension": 2,
+  "reference_shape": [
+    8,
+    8
+  ],
+  "times": [
+    0.0,
+    0.05,
+    0.1,
+    0.15
+  ],
+  "lengths": [
+    1.0,
+    1.0
+  ],
+  "origins": [
+    0.0,
+    0.0
+  ],
+  "diffusivity_range": [
+    0.03,
+    0.12
+  ],
+  "width": 16,
+  "tokens": 4,
+  "layers": 1,
+  "heads": 2,
+  "frequencies": 3,
+  "encoder_points": 32,
+  "query_points": 32,
+  "train_count": 12,
+  "validation_count": 6,
+  "test_count": 6,
+  "ae_steps": 2,
+  "flow_steps": 2,
+  "batch_size": 2,
+  "learning_rate": 0.0003,
+  "checkpoint_every": 1,
+  "seed": 73,
+  "observation_counts": [
+    1,
+    8
+  ],
+  "noise_range": [
+    0.0,
+    0.05
+  ],
+  "unconditional_probability": 0.0,
+  "runtime": {
+    "device": "cpu",
+    "dtype": "float32",
+    "threads": 2
+  },
+  "temporal_mode": "continuous",
+  "time_interval": [
+    0.0,
+    1.0
+  ],
+  "time_sampling": {},
+  "observation_placement": {},
+  "animation_frames": 31,
+  "data_mode": "procedural",
+  "distribution": {
+    "max_wave": 1,
+    "width": [
+      0.4,
+      0.5
+    ]
+  },
+  "training_options": {
+    "precision": "fp32",
+    "calibration_count": 6,
+    "validation_every": 1,
+    "validation_subset": 2,
+    "broad_every": 20,
+    "broad_subset": 6,
+    "observation_locations": "scattered"
+  }
+}

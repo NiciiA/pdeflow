@@ -1,0 +1,96 @@
+{
+  "dimension": 2,
+  "reference_shape": [
+    64,
+    64
+  ],
+  "times": [
+    0.0,
+    0.05,
+    0.1,
+    0.15
+  ],
+  "lengths": [
+    1.0,
+    1.0
+  ],
+  "origins": [
+    0.0,
+    0.0
+  ],
+  "diffusivity_range": [
+    0.03,
+    0.12
+  ],
+  "width": 512,
+  "tokens": 128,
+  "layers": 8,
+  "heads": 8,
+  "frequencies": 3,
+  "encoder_points": 1024,
+  "query_points": 512,
+  "train_count": 65536,
+  "validation_count": 2048,
+  "test_count": 2048,
+  "ae_steps": 100000,
+  "flow_steps": 100000,
+  "batch_size": 8,
+  "learning_rate": 0.0003,
+  "checkpoint_every": 500,
+  "seed": 73,
+  "observation_counts": [
+    1,
+    128
+  ],
+  "noise_range": [
+    0.0,
+    0.05
+  ],
+  "unconditional_probability": 0.0,
+  "runtime": {
+    "device": "cuda",
+    "dtype": "float32",
+    "threads": 2
+  },
+  "temporal_mode": "continuous",
+  "time_interval": [
+    0.0,
+    1.0
+  ],
+  "time_sampling": {},
+  "observation_placement": {},
+  "animation_frames": 31,
+  "data_mode": "procedural",
+  "distribution": {
+    "max_wave": 4,
+    "amplitude": [
+      0.4,
+      1.2
+    ],
+    "background": [
+      -0.5,
+      0.5
+    ],
+    "width": [
+      0.08,
+      0.18
+    ]
+  },
+  "training_options": {
+    "precision": "auto",
+    "calibration_count": 512,
+    "validation_every": 500,
+    "validation_subset": 12,
+    "broad_every": 5000,
+    "broad_subset": 48,
+    "observation_locations": "scattered",
+    "autoencoder": {
+      "warmup": 1000,
+      "schedule": "cosine"
+    },
+    "flow": {
+      "warmup": 1000,
+      "schedule": "cosine"
+    }
+  }
+}
