@@ -7,7 +7,7 @@ name = "pdeflow"
 version = "0.1.0"
 description = "Verified periodic PDE numerics and specialist flow reconstruction research"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11,<3.14"
 dependencies = ["torch>=2.5,<3", "numpy>=2.0,<3", "matplotlib>=3.9,<4"]
 
 [project.optional-dependencies]
