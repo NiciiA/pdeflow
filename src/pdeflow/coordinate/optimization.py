@@ -11,7 +11,7 @@ def options(c):
          'workers':0,'pin_memory':True,'validation_every':c.checkpoint_every,'validation_subset':min(c.validation_count,8),
          'broad_every':max(c.checkpoint_every,5000),'broad_subset':min(c.validation_count,24),
          'calibration_count':min(c.train_count,128),'keep_periodic':2,'observation_locations':'grid',
-         'autoencoder':{},'flow':{},'allow_source_change':False,'compile':False}
+         'autoencoder':{},'evolution':{},'flow':{},'allow_source_change':False,'compile':False,'profile_components':False}
     if set(c.training_options)-out.keys():raise ValueError('Unknown training options: '+', '.join(sorted(set(c.training_options)-out.keys())))
     out.update(c.training_options)
     if out['precision'] not in ('auto','fp32','bf16','fp16'):raise ValueError('Precision: auto, fp32, bf16 or fp16')
@@ -22,7 +22,7 @@ def options(c):
     if out['compile']:raise ValueError('Compilation is not enabled for this checkpointed dynamic observation architecture; use eager execution')
     if out['observation_locations'] not in ('grid','scattered'):raise ValueError('Observation locations: grid or scattered')
     if out['observation_locations']=='scattered' and c.data_mode!='procedural':raise ValueError('Scattered training observations require procedural Fourier references')
-    for stage,total in [('autoencoder',c.ae_steps),('flow',c.flow_steps)]:
+    for stage,total in [('autoencoder',c.ae_steps),('evolution',c.evolution_steps),('flow',c.flow_steps)]:
         value={'learning_rate':c.learning_rate,'weight_decay':0.,'warmup':0,'schedule':'constant','horizon':total,'minimum_ratio':.1,'gradient_clip':10.}
         if set(out[stage])-value.keys():raise ValueError(f'Unknown {stage} optimizer setting')
         value.update(out[stage]);out[stage]=value
@@ -49,14 +49,14 @@ def learning_rate(settings,completed):
 
 def scientific_source():
     base=Path(__file__).parents[1]
-    names=['coordinate/contracts.py','coordinate/model.py','coordinate/training.py','coordinate/engine.py','coordinate/dataset.py','coordinate/optimization.py','coordinate/temporal.py','heat_continuous.py','heat_placement.py','field_losses.py','numerics/__init__.py','core/__init__.py','equations/__init__.py']
+    names=['coordinate/contracts.py','coordinate/graph.py','coordinate/physics.py','numerics/dynamic.py','coordinate/model.py','coordinate/joint.py','coordinate/consistency.py','coordinate/profiling.py','coordinate/training.py','coordinate/engine.py','coordinate/dataset.py','coordinate/optimization.py','coordinate/temporal.py','heat_continuous.py','heat_placement.py','field_losses.py','numerics/__init__.py','core/__init__.py','equations/__init__.py']
     files={n:hashlib.sha256((base/n).read_bytes()).hexdigest() for n in names}
     return {'files':files,'sha256':digest(files),'policy':'Scientific model/data/loss/numerical source, excluding notebook, docs and unrelated UI'}
 
 
 def model_contract(c):
     ignored=('animation_frames','times') if c.temporal_mode=='continuous' else ()
-    return {**{k:v for k,v in c.to_dict().items() if k not in (*ignored,'runtime','ae_steps','flow_steps','learning_rate','checkpoint_every','batch_size','training_options')},
+    return {**{k:v for k,v in c.to_dict().items() if k not in (*ignored,'runtime','ae_steps','evolution_steps','flow_steps','learning_rate','checkpoint_every','batch_size','training_options')},
             'normalization_calibration_count':min(c.train_count,options(c)['calibration_count'])}
 
 
@@ -65,7 +65,7 @@ def resume_contract(old,c,stage,extend=False):
     prior=CoordinateConfig(**old['config']).validate()
     differences=[k for k,v in model_contract(c).items() if digest(v)!=digest(model_contract(prior).get(k))]
     if differences:raise ValueError('Incompatible model/data changes: '+', '.join(differences))
-    old_total=prior.ae_steps if stage=='autoencoder' else prior.flow_steps;new_total=c.ae_steps if stage=='autoencoder' else c.flow_steps
+    old_total=getattr(prior,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[stage]);new_total=getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[stage])
     if new_total!=old_total and not (extend and new_total>old_total):raise ValueError('A changed update budget requires deliberate extend mode and a larger total')
     current=options(c)[stage];saved=old['scheduler']['settings']
     # An extension keeps the original schedule horizon, then holds its terminal LR.
@@ -78,3 +78,9 @@ def resume_contract(old,c,stage,extend=False):
     changed_source=old.get('scientific_source',{}).get('sha256')!=scientific_source()['sha256']
     if changed_source and not options(c)['allow_source_change']:raise ValueError('Scientific training source changed; use the recorded source or explicitly record allow_source_change (not exact reproducibility)')
     return saved,changed_source
+
+
+def representation_contract(c):
+    """Flow-only auxiliary/cache switches do not change the frozen representation."""
+    value=model_contract(c);value['joint']={k:v for k,v in value['joint'].items() if k not in ('auxiliary','target_cache')}
+    return value

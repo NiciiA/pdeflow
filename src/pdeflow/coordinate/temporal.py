@@ -45,3 +45,10 @@ def capability(c):
     return {'mode':c.temporal_mode,'interval':list(c.interval),'trained_continuous':c.temporal_mode=='continuous',
             'snapshot_times':list(c.times) if c.temporal_mode!='continuous' else None,
             'validated_temporal_accuracy':False,'meaning':'Training-support declaration, not demonstrated temporal interpolation accuracy'}
+
+
+def state_time(c,iteration,g,role='query'):
+    """Recorded initial/early/uniform/final mixture; uniform part uses32 jittered strata."""
+    policy=policies(c);weights=policy[role];kind=list(weights)[int(torch.multinomial(torch.tensor(list(weights.values())),1,generator=g))];r=float(torch.rand((),generator=g))
+    fraction=0. if kind=='initial' else 1. if kind=='final' else float(np.exp(np.log(policy['early_min'])+r*np.log(policy['early_max']/policy['early_min']))) if kind=='early' else (iteration%32+r)/32
+    return c.interval[0]+fraction*(c.interval[1]-c.interval[0])

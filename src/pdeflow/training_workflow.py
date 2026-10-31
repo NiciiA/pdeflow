@@ -24,8 +24,8 @@ import torch
 from pdeflow import local
 from pdeflow.runtime import Config, RuntimeSpec, code_identity, digest, file_digest, read_json, write_json
 
-PROBLEMS = ('heat-1d', 'heat-2d', 'heat-3d', 'darcy-2d', 'darcy-3d', 'chemistry-2d', 'chemistry-3d')
-MODELS = {'fixed-grid': 'Existing fixed-grid model', 'resolution-flexible': 'Resolution-flexible model'}
+PROBLEMS = ('wave-2d','heat-wave-2d','heat-1d', 'heat-2d', 'heat-3d', 'darcy-2d', 'darcy-3d', 'chemistry-2d', 'chemistry-3d')
+MODELS = {'resolution-flexible': 'Operator-Aware Generative Latent Neural Operator'}
 BUDGETS = {
     'pipeline-check': 'Verifies execution; unsuitable for judging accuracy.',
     'development': 'Bounded experiment for assessing learning; adequacy unestablished.',
@@ -35,6 +35,7 @@ STAGE_LABELS = {
     'prepare': ('Prepare examples and fixed splits', 'Independent physical realizations; validation and test remain separate.'),
     'representation': ('Learn field representation', 'Compress complete training fields and decode physical coordinates (autoencoder).'),
     'representation_validation': ('Check field representation', 'Held-out validation distortion compared with a training-fitted constant predictor.'),
+    'evolution': ('Learn physical-time evolution','Frozen state encoder/decoder; shared graph and transition backbone learn complete physical-state dynamics.'),
     'flow': ('Learn conditional generation', 'Learn latent velocity conditioned on noisy observations; field representation stays frozen.'),
     'fixed': ('Learn fixed-grid generation', 'Learn field-space flow velocity; observations guide reconstruction afterward.'),
     'model_validation': ('Inspect validation reconstructions', 'Fixed held-out validation cases and sensor seeds; never the test split.'),
@@ -73,38 +74,31 @@ def fixed_model_entries(workspace=None):
 
 def options():
     available = {'cpu': True, 'mps': torch.backends.mps.is_available(), 'cuda': torch.cuda.is_available()}
-    return {'problems': list(PROBLEMS), 'models': MODELS, 'budgets': BUDGETS,
+    return {'problems': ['heat-2d','wave-2d','heat-wave-2d'], 'models': MODELS, 'budgets': BUDGETS,
             'devices': available, 'auto_device': 'cuda' if available['cuda'] else 'mps' if available['mps'] else 'cpu',
             'auto_explanation': 'Auto selects NVIDIA GPU when available, then Apple GPU, then CPU. Explicit unavailable choices reject; no concealed fallback.'}
 
 
 def _coordinate_profile(problem, budget):
-    name = 'heat-full.json' if budget == 'extended' else 'heat-smoke.json'
-    c = json.loads(files('pdeflow').joinpath('coordinate', 'profiles', name).read_text())
-    dimension = int(problem[-2])
-    size = c['reference_shape'][0] if dimension != 3 or budget != 'extended' else 16
-    c.update(dimension=dimension, reference_shape=[size] * dimension, lengths=[1.] * dimension, origins=[0.] * dimension)
-    if dimension==2:
-        from pdeflow.field_losses import recommended
-        c['field_loss']=recommended()
-        c.update(temporal_mode='continuous',time_interval=[0.,1.],data_mode='procedural',validation_count=max(6,c['validation_count']),test_count=max(6,c['test_count']))
-    if budget == 'development':
-        c.update(train_count=64, validation_count=8, test_count=8, ae_steps=500, flow_steps=500,
-                 encoder_points=256, query_points=256, width=32, checkpoint_every=50)
-    return c
+    from pdeflow.colab import training_preset as preset
+    from dataclasses import replace
+    c=preset('smoke' if budget=='pipeline-check' else 'xsmall' if budget=='development' else 'small',device='cpu',precision_policy='fp32')
+    weights={'heat':.5,'wave':.5} if problem=='heat-wave-2d' else {problem.split('-')[0]:1.}
+    if budget=='development':c=replace(c,train_count=64,validation_count=12,test_count=12,ae_steps=500,evolution_steps=500,flow_steps=500,checkpoint_every=50)
+    return replace(c,family_weights=weights).validate().to_dict()
 
 
 def plan(request):
     allowed = {'problem', 'model', 'budget', 'device', 'advanced', 'allow_poor_representation', 'representation_max_mse_ratio'}
     if set(request) - allowed:
         raise ValueError('Unknown training settings: ' + ', '.join(sorted(set(request) - allowed)))
-    request = {'problem': 'heat-2d', 'model': 'fixed-grid', 'budget': 'pipeline-check', 'device': 'auto',
+    request = {'problem': 'heat-wave-2d', 'model': 'resolution-flexible', 'budget': 'pipeline-check', 'device': 'auto',
                'advanced': {}, 'allow_poor_representation': False, 'representation_max_mse_ratio': 1., **request}
     problem, model, budget = (request[k] for k in ('problem', 'model', 'budget'))
     if problem not in PROBLEMS or model not in MODELS or budget not in BUDGETS:
         raise ValueError('Choose a supported problem, model and budget preset')
-    if model == 'resolution-flexible' and not problem.startswith('heat-'):
-        raise ValueError('The resolution-flexible specialist currently supports scalar periodic heat only')
+    if model == 'resolution-flexible' and problem not in ('heat-2d','wave-2d','heat-wave-2d'):
+        raise ValueError('The shared operator supports periodic heat/wave2D')
     dev, _ = RuntimeSpec(device=request['device']).resolve()
     advanced = request.get('advanced') or {}
     if not isinstance(advanced, dict):
@@ -128,56 +122,25 @@ def plan(request):
         config.update(advanced)
         config['runtime'] = {**config['runtime'], 'device': str(dev)}
         c = CoordinateConfig(**config).validate()
+        expected={'heat','wave'} if problem=='heat-wave-2d' else {problem.split('-')[0]}
+        if set(c.family_weights)!=expected:raise ValueError('Training equations conflict with advanced family_weights; choose matching Heat only, Wave only or Heat + Wave. No family fallback is applied.')
+        from pdeflow.coordinate.physics import training_spec
+        physics=training_spec(c)
         physical = data_config(c)
-        updates = {'representation': c.ae_steps, 'flow': c.flow_steps}
+        updates = {'representation': c.ae_steps,'evolution':c.evolution_steps,'flow': c.flow_steps}
         examples = {'training': c.train_count, 'validation': c.validation_count, 'untouched_test': c.test_count}
         config = c.to_dict()
-        stages = ['prepare', 'representation', 'representation_validation', 'flow', 'model_validation', 'register']
-    else:
-        base = 'heat-2d' if problem == 'heat-1d' else problem
-        c = local.preset_config('quickstart-heat-2d' if problem.startswith('heat') and budget == 'pipeline-check' else base)
-        if c.grid.dimension != int(problem[-2]):
-            from pdeflow.core import GridSpec, DomainSpec
-            dimension = int(problem[-2])
-            c = replace(c, grid=GridSpec((c.grid.shape[0],) * dimension, DomainSpec((1.,) * dimension), c.grid.times))
-        if budget == 'pipeline-check':
-            c = replace(c, grid=replace(c.grid, shape=(4 if problem.endswith('3d') else 8,) * c.grid.dimension),
-                        training=replace(c.training, steps=2, batch_size=1, checkpoint_every=1),
-                        provider=replace(c.provider, calibration_count=4, validation_count=2, test_count=2),
-                        inference=replace(c.inference, steps=2, particles=2, sensors=min(c.inference.sensors, 8)))
-        elif budget == 'development':
-            c = replace(c, training=replace(c.training, steps=500, checkpoint_every=50))
-        config = c.to_dict()
-        allowed_sections = {'data', 'model', 'training', 'provider', 'inference', 'grid', 'chemistry'}
-        if set(advanced) - allowed_sections:
-            raise ValueError('Fixed-grid advanced settings use data/model/training/provider/inference/grid/chemistry sections')
-        for key, changes in advanced.items():
-            if not isinstance(changes, dict) or not isinstance(config.get(key), dict):
-                raise ValueError(f'{key} must be an existing named configuration section')
-            config[key].update(changes)
-        config['runtime']['device'] = str(dev)
-        c = Config.from_dict(config)
-        if c.specialist != problem.rsplit('-', 1)[0] or c.grid.dimension != int(problem[-2]):
-            raise ValueError('Advanced settings cannot change the selected specialist/dimension')
-        physical = c
-        updates = {'fixed': c.training.steps}
-        training_examples = c.provider.offline_count if c.provider.mode == 'offline' else f'hybrid: reusable pool up to {c.provider.capacity}; actual consumed count recorded during training' if c.provider.mode == 'hybrid' else 'online: new seeded physical problems; actual consumed count recorded during training'
-        examples = {'training': training_examples,
-                    'calibration': c.provider.calibration_count, 'validation': c.provider.validation_count,
-                    'untouched_test': c.provider.test_count}
-        stages = ['prepare', 'fixed', 'model_validation', 'register']
+        stages = ['prepare', 'representation', 'representation_validation','evolution','flow', 'model_validation', 'register']
     # A custom update count must not retain the pipeline-check label accidentally.
     pipeline = budget == 'pipeline-check'
     return {'schema_version': 1, 'request': request, 'problem': problem, 'model': model, 'model_label': MODELS[model],
             'budget': budget, 'budget_meaning': BUDGETS[budget], 'pipeline_check': pipeline,
             'requested_device': request['device'], 'resolved_device': str(dev), 'config': config,
             'distribution': __import__('pdeflow.coordinate.dataset',fromlist=['recipe']).recipe(c) if model=='resolution-flexible' and c.temporal_mode=='continuous' else distribution(physical), 'examples': examples, 'updates': updates,
-            'stages': stages, 'grid': physical.to_dict()['grid'],
-            'equation': {'heat': '∂u/∂τ = D Δu', 'darcy': '−div(a ∇u) = f; a > 0; mean(u) = 0 (pressure gauge)',
-                         'chemistry': '∂τ(a,b,c) = diffusion + (−r,−r,+r); r = k_f a b − k_r c'}[physical.specialist],
-            'varies': 'Six-family periodic initial-field mixture, continuously sampled physical times and configured sensor-placement mixture.' if model=='resolution-flexible' and c.temporal_mode=='continuous' else {'heat': 'Smooth random initial fields and known constant diffusivity within the recorded range.',
-                       'darcy': 'Positive random permeability and compatible mean-zero forcing; zero-mean pressure gauge.',
-                       'chemistry': 'Positive initial species fields and the recorded diffusion/reaction parameter ranges.'}[physical.specialist],
+            'architecture_parameters':__import__('pdeflow.coordinate.presets',fromlist=['counts']).counts(c),
+            'stages': stages,'training_physics':physics, 'grid': physical.to_dict()['grid'],
+            'equation': ' · '.join(physics['equations'].values()),
+            'varies': 'Periodic initial-field shape mixtures, continuous physical times and an independent observation-placement mixture. Initial-field mixture types are not PDE families.',
             'quality_policy': {'max_mse_ratio': float(ratio), 'override': request.get('allow_poor_representation', False),
                                'pipeline_exemption': pipeline,
                                'meaning': 'Validation MSE must improve on a training-fitted constant predictor. This is a minimal sanity check, not a universal adequacy threshold. Pipeline checks exercise stages without claiming quality.'}}
@@ -248,7 +211,7 @@ def start(request, workspace=None, token=None, background=True):
 
 def _child_progress(path, record):
     p = record['plan']
-    directory = path / ('coordinate-ae' if record['stage'] in ('prepare', 'representation', 'representation_validation') else 'coordinate-flow')
+    directory = path / ('evolution' if record['stage']=='evolution' else 'coordinate-ae' if record['stage'] in ('prepare', 'representation', 'representation_validation') else 'coordinate-flow')
     if p['model'] == 'fixed-grid':
         directory = path / 'fixed'
     file = directory / 'run.json'
@@ -281,7 +244,7 @@ def status(selector='latest', workspace=None):
         state = 'interrupted'
     child, history = _child_progress(path, record)
     stage = 'prepare' if child.get('state') == 'preparing' and active else record['stage']
-    progress = child.get('progress', 0) if record['stage'] in ('prepare', 'representation', 'flow', 'fixed') else 0
+    progress = child.get('progress', 0) if record['stage'] in ('prepare','representation','evolution','flow','fixed') else 0
     total = record['plan']['updates'].get(record['stage'], 0)
     elapsed = record.get('elapsed_seconds_total', 0.)
     if active:
@@ -339,6 +302,7 @@ def resume(selector='latest', workspace=None, allow_poor_representation=False, b
         if current['state'] == 'completed':
             raise ValueError('This budget is complete. Start a new experiment; latent train-further with changed targets/configuration is not supported.')
         record = read_json(path / 'workflow.json')
+        if record['plan']['model']!='resolution-flexible':raise ValueError('Legacy generative training is retired; start a new joint model run. Existing artifacts remain untouched.')
         if record['source']['source_sha256'] != code_identity()['source_sha256']:
             raise ValueError('Resume requires the recorded source version. Inference exports remain usable; start a new run after code changes.')
         if allow_poor_representation:
@@ -415,27 +379,8 @@ def representation_quality(ae_path, report, max_ratio=1.):
 
 
 def _coordinate_validation(path, config, device):
-    from pdeflow.coordinate.training import data_config
-    from pdeflow.coordinate.contracts import CoordinateConfig, grid_queries
-    from pdeflow.coordinate.inference import CoordinateBundle
-    from pdeflow.coordinate.evaluation import error_summary
-    from pdeflow.equations import heat_problem
-    c = CoordinateConfig(**config).validate(); bundle = CoordinateBundle(path / 'coordinate-flow/coordinate.pt', device)
-    from pdeflow.coordinate.dataset import Dataset
-    data = Dataset(c,path/'coordinate-ae',False)
-    records = []
-    for i in range(min(2,c.validation_count)):
-        item=data.get('validation',i);q=grid_queries(data_config(c).grid).numpy() if c.temporal_mode=='continuous' else data.q.numpy();truth=item['solver'].evaluate(q,item['D'],c.interval) if c.temporal_mode=='continuous' else item['values'];rng=np.random.default_rng(c.seed+9100+i)
-        ix=rng.choice(len(q),min(8,c.observation_counts[1],len(q)),replace=False);sigma=sum(c.noise_range)/2
-        rows=[dict(field='u',**dict(zip(('x','y','z')[:c.dimension],q[k,:c.dimension].tolist())),time=float(q[k,-1]),value=float(truth[k]+rng.normal(0,sigma)),sigma=sigma) for k in ix]
-        p=heat_problem(data_config(c).grid,item['D'])
-        prediction,metrics=bundle.sample(p,rows,grid_queries(p.grid),steps=2 if config['flow_steps']<=4 else 12,particles=2,seed=c.seed+8100+i)
-        from pdeflow.runtime import atomic_write
-        destination=path/'validation'/str(len(records));destination.mkdir(parents=True,exist_ok=True)
-        atomic_write(destination/'preview.npz',lambda f:np.savez_compressed(f,prediction=prediction.mean(0),reference=truth))
-        write_json(destination/'problem.json',p.to_dict());write_json(destination/'observations.json',rows)
-        records.append({'id':item['id'],**error_summary(prediction,truth),'observation_consistency':metrics['observation_consistency'],'case':len(records)})
-    return {'split': 'validation', 'records': records, 'meaning': 'Fixed validation cases/seeds; two generated samples. No test evaluation or calibrated uncertainty.'}
+    from pdeflow.coordinate.validation import flow
+    return flow(path/'coordinate-flow/coordinate.pt',path/'flow-validation.json',device,subset=2,steps=2 if config['flow_steps']<=4 else 8,particles=1)
 
 
 def execute(path):
@@ -470,34 +415,13 @@ def execute(path):
                     return
                 if outcome['state']!='completed':raise InterruptedError('Coordinate training stopped at a saved optimizer boundary')
                 validation=outcome['validation'];export=Path(outcome['export'])
-            else:
-                child = path / 'fixed'
-                if 'fixed' not in record['finished_stages']:
-                    stage('fixed')
-                    if (child / 'run.json').exists():
-                        from pdeflow.training import _read_checkpoint
-                        checkpoint = child / 'training/checkpoint.pt'
-                        old_config = _read_checkpoint(checkpoint)[1] if checkpoint.exists() else Config.load(child / 'config.json', check_device=False)
-                        extra = p['config']['training']['steps'] - old_config.training.steps
-                        result = local.resume_training(str(child), additional_steps=extra if extra > 0 else None, should_stop=should_stop)
-                    else:
-                        result = local.start_training(config_path=path / 'resolved-config.json', workspace=record['workspace'],
-                                                      output=child, name=f"{p['problem']} · {p['budget']}", should_stop=should_stop)
-                    if result['state'] != 'completed':
-                        raise InterruptedError('Fixed-grid generation stopped at a saved update')
-                    finish('prepare'); finish('fixed')
-                stage('model_validation')
-                report_path = path / record.get('validation_report_file', 'model-validation.json')
-                validation = read_json(report_path) if report_path.exists() else local.evaluate_run(str(child), split='validation', device=p['resolved_device'])
-                write_json(report_path, validation)
-                export = child / 'training/inference.pt'
+            else:raise ValueError('Legacy generative workflow is retired; start a new joint model run')
             _save(path, record, validation=validation)
             finish('model_validation'); stage('register')
             if p['model'] == 'resolution-flexible':
                 from pdeflow.coordinate.registry import register_checkpoint
                 register_checkpoint(export, record['workspace'])
-            # Fixed model already belongs to the managed run registry. Registration
-            # never changes the user's selected reconstruction model.
+            # Registration never changes the user's selected reconstruction model.
             finish('register')
             _save(path, record, state='completed', model_id=file_digest(export)[:32], export=str(export), finished_unix=time.time(),
                   warning='Pipeline-check checkpoint: execution only; unsuitable for judging accuracy.' if p['pipeline_check'] else 'Inspect held-out validation; completion does not establish useful accuracy.')
@@ -531,22 +455,13 @@ def model_list(workspace=None, problem=None):
                 older = {**read_json(snapshot), 'is_snapshot':True}
                 if older.get('model_id'):workflows[older['model_id']] = older
     result = {}
-    for entry in fixed_model_entries(workspace):
-        try:
-            cp, c, _ = _read_checkpoint(entry['path']); identifier = file_digest(entry['path'])[:32]
-            physical = get_specialist(c.specialist).default_problem(c.grid)
-            compatibility = compatibility_report(p, c) if p else {'compatible': False, 'summary': 'No current executable problem; use the model training problem.'}
-            result[identifier] = {'id': identifier, 'model': 'fixed-grid', 'type': MODELS['fixed-grid'], 'problem': physical.to_dict(),
-                                  'updates': {'fixed': cp['progress']}, 'status': entry.get('run_state', 'available export'),
-                                  'path': entry['path'], 'compatibility': compatibility, 'available': True}
-        except (ValueError, RuntimeError, OSError, KeyError):
-            continue
     for entry in coordinate_runs(workspace):
         if entry.get('stage') != 'flow' or not entry.get('available'):
             continue
         c = CoordinateConfig(**entry['config']).validate()
-        from pdeflow.equations import heat_problem
-        physical = heat_problem(data_config(c).grid, sum(c.diffusivity_range) / 2)
+        from pdeflow.coordinate.physics import problem as dynamic_problem
+        family=p.family if p and p.family in c.family_weights else next(iter(c.family_weights));bounds=c.diffusivity_range if family=="heat" else c.wave_speed_range
+        physical=dynamic_problem(data_config(c).grid,family,sum(bounds)/2)
         compatible, reason = False, 'No current executable problem; use the model training problem.'
         if p:
             try:
@@ -555,7 +470,7 @@ def model_list(workspace=None, problem=None):
                 reason = str(error)
         identifier = entry['model_id']
         result[identifier] = {'id': identifier, 'model': 'resolution-flexible', 'type': MODELS['resolution-flexible'],
-                              'problem': physical.to_dict(), 'updates': {'representation': entry.get('dependency', {}).get('progress', c.ae_steps), 'flow': entry['progress']},
+                              'problem': physical.to_dict(), 'updates': {'representation':c.ae_steps,'evolution':c.evolution_steps,'flow': entry['progress']},
                               'status': entry['state'], 'path': entry['export'], 'compatibility': {'compatible': compatible, 'summary': reason}, 'available': True}
     for identifier, row in result.items():
         workflow = workflows.get(identifier)
@@ -581,7 +496,7 @@ def select_model(identifier, workspace=None, problem=None, adopt_training_proble
         return select_model(record['model_id'], workspace, problem, adopt_training_problem)
     if problem and not entry['compatibility']['compatible'] and not adopt_training_problem:
         raise ValueError(entry['compatibility']['summary'])
-    request = from_problem(ProblemSpec.from_dict(entry['problem']), seed=53).request
+    request = from_problem(ProblemSpec.from_dict(entry['problem']), seed=53).request if entry['problem']['family']=='heat' else None
     selection = {'id': entry['id'], 'model': entry['model'], 'selected_at': local.now(),
                  'pipeline_check': entry['pipeline_check'], 'problem': entry['problem'],
                  'suggested_request': request, 'adopt_training_problem': adopt_training_problem,
@@ -598,11 +513,16 @@ def preview(selector='latest', workspace=None, case=0, field=0, time_index=0, ax
     if type(case) != int or not 0 <= case < 2:
         raise ValueError('Choose a recorded validation case 0 or 1')
     if record['plan']['model'] == 'resolution-flexible':
-        directory = path / 'validation' / str(case)
-        problem = ProblemSpec.from_dict(read_json(directory / 'problem.json'))
-        with np.load(directory / 'preview.npz', allow_pickle=False) as data:
-            predicted = data['prediction'].reshape(1, len(problem.grid.times), *problem.grid.shape)
-            reference = data['reference'].reshape(predicted.shape)
+        from pdeflow.coordinate.physics import problem as dynamic_problem
+        from pdeflow.core import GridSpec,DomainSpec
+        report=read_json(path/'flow-validation.json');rows=report['records'];row=rows[min(case*2,len(rows)-1)];offset=0
+        for r in rows[:min(case*2,len(rows)-1)]:offset+=2 if r['family']=='wave' else 1
+        with np.load(path/'flow-validation.npz',allow_pickle=False) as data:
+            available=data['preview'];count=2 if row['family']=='wave' else 1
+            if offset+count>len(available):raise ValueError('Selected bounded validation preview unavailable')
+            selected=available[offset:offset+count];reference=selected[:,0];predicted=selected[:,1]
+        cfg=record['plan']['config'];grid=GridSpec(tuple(predicted.shape[-2:]),DomainSpec(tuple(cfg['lengths']),tuple(cfg['origins'])),tuple(report['settings']['times']));problem=dynamic_problem(grid,row['family'],None)
+
     else:
         report = read_json(path / record.get('validation_report_file', 'model-validation.json')); evaluation = Path(report['output'])
         cases = sorted((evaluation).glob('*/observation_pde/result.npz'))
@@ -623,63 +543,62 @@ def preview(selector='latest', workspace=None, case=0, field=0, time_index=0, ax
     return payload
 
 
-def coordinate_stages(config, path, stages='both', mode='new', dependency=None, gate_ratio=1., override_gate=False, stop_after=None, event=None, names=('autoencoder','flow'),stage_hook=None,finish_hook=None,should_stop=None,local_validation=False):
-    """Shared two-stage driver for procedural local/CLI/notebook training.
-
-    Uses the same train, representation evaluation and quality-gate semantics as
-    execute(), with bounded representative evaluation for large populations.
-    """
+def coordinate_stages(config,path,stages='both',mode='new',dependency=None,gate_ratio=1.,override_gate=False,stop_after=None,event=None,names=('autoencoder','flow'),stage_hook=None,finish_hook=None,should_stop=None,local_validation=False):
+    """One shared A1 → A2 → B local/Colab driver, immutable stage dependencies."""
     from pdeflow.coordinate.contracts import CoordinateConfig
-    from pdeflow.coordinate.training import train, read_checkpoint
-    from pdeflow.coordinate.validation import representation,flow as evaluate_flow
-    from pdeflow.coordinate.optimization import options
-    c=CoordinateConfig(**config).validate();path=Path(path);ae=path/names[0];flow=path/names[1];o=options(c)
+    from pdeflow.coordinate.training import train,read_checkpoint
+    from pdeflow.coordinate.validation import representation,evolution as evaluate_evolution,flow as evaluate_flow
+    from pdeflow.coordinate.optimization import resume_contract
+    c=CoordinateConfig(**config).validate();path=Path(path);ae=path/names[0];ev=path/'evolution';fl=path/names[1]
+    if stages not in ('both','representation','evolution','flow'):raise ValueError('Choose both, representation, evolution or flow')
     def stage(key):
         if stage_hook:stage_hook(key)
     def finish(key):
         if finish_hook:finish_hook(key)
-    def run_stage(stage,root,dependency=None):
-        resume=(root/'run.json').exists()
-        if resume and (root/'resume.pt').exists():
-            cp,old=read_checkpoint(root/'resume.pt',stage)
-            from pdeflow.coordinate.optimization import resume_contract
-            resume_contract(cp,c,stage,mode=='extend')
-            total=c.ae_steps if stage=='autoencoder' else c.flow_steps
+    def run(kind,root,dep=None):
+        stage({'autoencoder':'representation'}.get(kind,kind));resume=(root/'resume.pt').exists()
+        if resume:
+            cp,_=read_checkpoint(root/'resume.pt',kind);resume_contract(cp,c,kind,mode=='extend')
+            total=getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[kind])
             if cp['completed'] and cp['progress']==total:return read_json(root/'run.json')
-        return train(config,root,stage,dependency,resume,stop_after,should_stop=should_stop or (lambda:(path/'stop-request.json').exists()),event=event,extend=mode=='extend')
+            if kind!='flow' and (fl/'resume.pt').exists():raise ValueError('Changing the frozen representation/operator requires a new downstream run')
+        return train(config,root,kind,dep,resume,stop_after,should_stop=should_stop or (lambda:(path/'stop-request.json').exists()),event=event,extend=mode=='extend')
     if stages in ('both','representation'):
-        if (flow/'resume.pt').exists() and (ae/'resume.pt').exists() and read_checkpoint(ae/'resume.pt')[0]['progress']<c.ae_steps:
-            raise ValueError('Extending a representation changes frozen flow targets. Use a new run for a new representation; extend flow alone to preserve the existing target.')
-        stage('representation');r=run_stage('autoencoder',ae)
+        r=run('autoencoder',ae)
         if r['state']!='completed':return {'state':'interrupted','stage':'autoencoder','progress':r['progress']}
         finish('prepare');finish('representation')
-    dependency=dependency or ae/'autoencoder.pt'
-    stage('representation_validation')
-    if not Path(dependency).exists():raise ValueError('Choose a completed compatible representation run for flow-only training')
-    evaluation_path=path/'representation-validation.json'
-    if evaluation_path.exists() and read_json(evaluation_path)['checkpoint_sha256']==file_digest(dependency):report=read_json(evaluation_path)
+    aep=ae/'autoencoder.pt';evp=ev/'evolution.pt'
+    if dependency:
+        dcp,_=read_checkpoint(dependency)
+        if dcp['stage']=='autoencoder':aep=Path(dependency)
+        elif dcp['stage']=='evolution':
+            evp=Path(dependency);aep=(evp.parent/dcp['dependency']['path']).resolve()
+        else:raise ValueError('Frozen dependency must be A1 or A2')
+    if not aep.exists():raise ValueError('Choose a compatible completed A1 representation')
+    stage('representation_validation');report_path=path/'representation-validation.json'
+    if report_path.exists() and read_json(report_path)['checkpoint_sha256']==file_digest(aep):report=read_json(report_path)
     else:
-        if evaluation_path.exists():evaluation_path.rename(path/f'representation-validation-{uuid.uuid4().hex[:8]}.json')
-        report=representation(dependency,evaluation_path,c.runtime['device'],subset=min(c.validation_count,max(len(c.distribution.get('families',{})) or 6,o['broad_subset'])))
-    quality=representation_quality(dependency,report,gate_ratio);write_json(path/'representation-quality.json',quality)
-    finish('representation_validation')
+        if report_path.exists():report_path.rename(path/('representation-validation-'+uuid.uuid4().hex[:8]+'.json'))
+        report=representation(aep,report_path,c.runtime['device'],subset=min(c.validation_count,12))
+    quality=representation_quality(aep,report,gate_ratio);write_json(path/'representation-quality.json',quality);finish('representation_validation')
     if stages=='representation':return {'state':'completed','stage':'representation_validation','quality':quality}
-    if not quality['passed'] and not override_gate:return {'state':'needs_review','stage':'representation_gate','quality':quality,'representation_validation':report,'meaning':'Saved representation did not beat the constant baseline. Flow not started. Explicit recorded override required.'}
-    stage('flow');r=run_stage('flow',flow,dependency)
+    if not quality['passed'] and not override_gate:return {'state':'needs_review','stage':'representation_gate','quality':quality,'representation_validation':report}
+    # Even flow-only runs need an actual trained A2 dependency. No decoder shortcut.
+    if not dependency or dcp['stage']!='evolution':
+        r=run('evolution',ev,aep)
+        if r['state']!='completed':return {'state':'interrupted','stage':'evolution','progress':r['progress'],'quality':quality}
+    finish('evolution')
+    er=path/'evolution-validation.json'
+    if not er.exists():evaluate_evolution(evp,er,c.runtime['device'],subset=min(c.validation_count,12))
+    if stages=='evolution':return {'state':'completed','stage':'evolution','quality':quality}
+    r=run('flow',fl,evp)
     if r['state']!='completed':return {'state':'interrupted','stage':'flow','progress':r['progress'],'quality':quality}
-    finish('flow');stage('model_validation')
-    if local_validation:
-        evaluation=_coordinate_validation(path,config,c.runtime['device']);write_json(path/'model-validation.json',evaluation)
-        return {'state':'completed','quality':quality,'representation_validation':report,'gate_override':override_gate,'validation':evaluation,'export':str(flow/'coordinate.pt')}
-    previous=path/'flow-validation.json'
-    if previous.exists() and read_json(previous).get('checkpoint_sha256')==file_digest(flow/'coordinate.pt'):evaluation=read_json(previous)
+    finish('flow');stage('model_validation');report_path=path/'flow-validation.json'
+    if report_path.exists() and read_json(report_path)['checkpoint_sha256']==file_digest(fl/'coordinate.pt'):evaluation=read_json(report_path)
     else:
-        if previous.exists():
-            archive=path/'evaluations'/uuid.uuid4().hex[:12];archive.mkdir(parents=True)
-            previous.rename(archive/'flow-validation.json')
-            if previous.with_suffix('.npz').exists():previous.with_suffix('.npz').rename(archive/'flow-validation.npz')
-        evaluation=evaluate_flow(flow/'coordinate.pt',previous,c.runtime['device'],subset=min(c.validation_count,6),steps=2 if c.flow_steps<=4 else 8)
-    return {'state':'completed','stage':'evaluated','quality':quality,'representation_validation':report,'gate_override':override_gate,'validation':evaluation,'export':str(flow/'coordinate.pt')}
+        if report_path.exists():report_path.rename(path/('flow-validation-'+uuid.uuid4().hex[:8]+'.json'))
+        evaluation=evaluate_flow(fl/'coordinate.pt',report_path,c.runtime['device'],subset=2 if c.flow_steps<=4 else min(c.validation_count,12),particles=1,steps=2 if c.flow_steps<=4 else 8)
+    return {'state':'completed','stage':'evaluated','quality':quality,'representation_validation':report,'gate_override':override_gate,'validation':evaluation,'export':str(fl/'coordinate.pt')}
 
 
 if __name__ == '__main__':

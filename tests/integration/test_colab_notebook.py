@@ -11,7 +11,7 @@ def test_notebook_structure():
     for i,c in enumerate(code):
         compile(''.join(c['source']),f'cell-{i}','exec');assert c['outputs']==[] and c['execution_count'] is None
     assert 'RUN_TRAINING = False' in ''.join(code[4]['source'])
-    assert Path('notebooks/colab-legacy.ipynb').exists()
+    assert 'from pdeflow.colab import training_preset' in ''.join(code[2]['source'])
 
 
 def test_real_run_all_source_archive_setup_profile_train_export(tmp_path):

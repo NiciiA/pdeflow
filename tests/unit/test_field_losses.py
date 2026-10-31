@@ -53,7 +53,7 @@ def test_settings_fail_early(key,value):
 
 def test_grouped_estimator_all_regions_covered_per_example_time_and_cost():
     from pdeflow.heat_continuous import FourierHeat
-    c=CoordinateConfig(temporal_mode='continuous',data_mode='procedural',reference_shape=(16,16),train_count=12,validation_count=6,test_count=6,query_points=128,field_loss={**CFG,'time_groups':2,'region_queries':64},observation_counts=(1,8)).validate()
+    c=CoordinateConfig(family_weights={'heat':1.},temporal_mode='continuous',data_mode='procedural',reference_shape=(16,16),train_count=12,validation_count=6,test_count=6,query_points=128,field_loss={**CFG,'time_groups':2,'region_queries':64},observation_counts=(1,8)).validate()
     items=[{'solver':FourierHeat(spots(),(1,1),(0,0)),'id':'a','D':.0001}, {'solver':FourierHeat(np.ones((16,16)),(1,1),(0,0)),'id':'b','D':.0001}]
     q,t,w,stats=grouped_queries(c,items,torch.Generator().manual_seed(2),{'scale':1},AnalysisCache())
     assert q.shape==(2,192,3) and torch.allclose(w.sum(1),torch.ones(2),atol=1e-6)
@@ -75,7 +75,7 @@ def test_contribution_quadrature_and_weighted_estimator():
 def test_unbiased_nonuniform_supervision_estimator(kind):
     from pdeflow.heat_continuous import FourierHeat
     from dataclasses import replace
-    c=CoordinateConfig(temporal_mode='continuous',data_mode='procedural',reference_shape=(16,16),train_count=12,validation_count=6,test_count=6,
+    c=CoordinateConfig(family_weights={'heat':1.},temporal_mode='continuous',data_mode='procedural',reference_shape=(16,16),train_count=12,validation_count=6,test_count=6,
        query_points=8192,field_loss={**CFG,'type':kind,'time_groups':1,'region_queries':8192},observation_counts=(1,8)).validate()
     item={'solver':FourierHeat(spots(),(1,1),(0,0)),'id':'a','D':.0001}
     q,t,w,stats=grouped_queries(c,[item],torch.Generator().manual_seed(12),{'scale':1},AnalysisCache())

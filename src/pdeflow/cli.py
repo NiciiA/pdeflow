@@ -109,12 +109,13 @@ def main():
             p.add_argument('--detach', action='store_true', help='Return after launch; worker survives terminal/API disconnects')
             p.add_argument('--allow-poor-representation', action='store_true', help='Explicitly continue despite the validation baseline gate; recorded in run provenance')
         if action == 'start':
-            p.add_argument('--problem', default='heat-2d', choices=['heat-1d','heat-2d','heat-3d','darcy-2d','darcy-3d','chemistry-2d','chemistry-3d'])
-            p.add_argument('--model', default='fixed-grid', choices=['fixed-grid','resolution-flexible'])
+            p.add_argument('--problem', default='heat-wave-2d', choices=['heat-2d','wave-2d','heat-wave-2d'])
+            p.add_argument('--model', default='resolution-flexible', choices=['resolution-flexible'])
             p.add_argument('--budget', default='pipeline-check', choices=['pipeline-check','development','extended'])
             p.add_argument('--device', default='auto', choices=['auto','cpu','mps','cuda'])
             p.add_argument('--plan', action='store_true', help='Inspect resolved settings without launching')
             p.add_argument('--updates', type=int, help='Fixed-grid optimizer updates')
+            p.add_argument('--evolution-updates',type=int)
             p.add_argument('--representation-updates', type=int)
             p.add_argument('--flow-updates', type=int)
         if action == 'extend':p.add_argument('--additional-updates', type=int, required=True)
@@ -201,7 +202,7 @@ def main():
     p=sub.add_parser('cleanup');p.add_argument('--root');p.add_argument('--register-cache');p.add_argument('--apply');p.add_argument('--confirm');p.add_argument('--preview',action='store_true')
     p=sub.add_parser('pin');p.add_argument('path');p.add_argument('--root');p.add_argument('--unpin',action='store_true')
     p=sub.add_parser('diagnose-learning');p.add_argument('--checkpoint',required=True);p.add_argument('--output',required=True);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda']);p.add_argument('--updates',type=int,default=100);p.add_argument('--cases',type=int,default=2)
-    p=sub.add_parser('coordinate-train');p.add_argument('--config',required=True);p.add_argument('--stage',choices=['autoencoder','flow'],required=True);p.add_argument('--output',required=True);p.add_argument('--autoencoder');p.add_argument('--resume',action='store_true');p.add_argument('--stop-after',type=int);p.add_argument('--extend',action='store_true')
+    p=sub.add_parser('coordinate-train');p.add_argument('--config',required=True);p.add_argument('--stage',choices=['autoencoder','evolution','flow'],required=True);p.add_argument('--output',required=True);p.add_argument('--autoencoder','--dependency',dest='autoencoder');p.add_argument('--resume',action='store_true');p.add_argument('--stop-after',type=int);p.add_argument('--extend',action='store_true')
     p=sub.add_parser('coordinate-evaluate-ae');p.add_argument('--checkpoint',required=True);p.add_argument('--output',required=True);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda','auto']);p.add_argument('--split',default='validation',choices=['validation','test'])
     p=sub.add_parser('coordinate-import');p.add_argument('--checkpoint',required=True);p.add_argument('--workspace')
     p=sub.add_parser('coordinate-runs');p.add_argument('--workspace')
@@ -212,6 +213,8 @@ def main():
     args = parser.parse_args()
     try:
         from pdeflow import local
+        if args.command in ('train','reconstruct','smoke','resume','train-all','resume-suite','experiment','compare','preflight','capacity-probe','coordinate-compare'):
+            raise ValueError('Legacy generative architecture is retired. Use training start --model resolution-flexible or coordinate-train/reconstruct with a joint checkpoint. Existing artifacts remain untouched.')
         if args.command == 'training':
             from pdeflow import training_workflow as workflow
             if args.training_action == 'start':
@@ -219,6 +222,7 @@ def main():
                 if args.model == 'resolution-flexible':
                     if args.updates is not None:raise ValueError('Choose separate --representation-updates and --flow-updates for this model')
                     if args.representation_updates is not None:advanced['ae_steps'] = args.representation_updates
+                    if args.evolution_updates is not None:advanced['evolution_steps']=args.evolution_updates
                     if args.flow_updates is not None:advanced['flow_steps'] = args.flow_updates
                 else:
                     if args.representation_updates is not None or args.flow_updates is not None:raise ValueError('Fixed-grid training has one --updates budget')

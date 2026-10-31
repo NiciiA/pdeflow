@@ -11,7 +11,7 @@ from pdeflow.runtime import write_json
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True)
-    p.add_argument('--device',choices=['cpu','mps','cuda'],default='cpu');p.add_argument('--preset',choices=['pipeline-check','medium','large'],default='medium')
+    p.add_argument('--device',choices=['cpu','mps','cuda'],default='cpu');p.add_argument('--preset',choices=['pipeline-check','smoke','xsmall','small','medium','large','xlarge'],default='xsmall')
     p.add_argument('--updates',type=int,default=200);p.add_argument('--run',action='store_true');args=p.parse_args()
     if args.updates<1:raise ValueError('Updates must be positive')
     if args.output.exists() and any(args.output.iterdir()):raise FileExistsError('Choose a fresh comparison root; existing plans/results are preserved')
@@ -26,7 +26,7 @@ def main():
             representation(directory/'representation/autoencoder.pt',directory/'validation.json',args.device,subset=min(24,c.validation_count))
     write_json(args.output/'comparison-plan.json',{'configs':plans,'executed':args.run,'selection':'Validation only; no test cases or winning budget chosen',
         'controlled':'Same architecture, underlying solution/split/normalization identities, independent domain/region RNGs, physical-time groups, observations, optimizer and update budget.',
-        'cost':'Region-balanced adds its recorded fixed region-query budget. Compare measured query counts/data_seconds/step_seconds; equal updates are not equal compute.',
+        'cost':'Region-balanced adds its recorded fixed region-query budget separately for solution and initial fields. Compare measured query counts/data_seconds/step_seconds; equal updates are not equal compute.',
         'metrics':'Uniform physical MSE/RMSE/MAE/relative L2, weighted/region errors, per-region size/error, background, initial/time strata and spectral power distortion.'})
     print('Executed comparison' if args.run else 'Plans only; no training launched',args.output)
 if __name__=='__main__':main()

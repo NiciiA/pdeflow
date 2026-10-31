@@ -702,3 +702,81 @@ reductions. No latent-token masks or auxiliary flow objective. Preserve checkpoi
 resume source and loss identities; changed objectives require new runs. Use separate
 scalar-metric/map controls and unchanged spatial marginals. Formula, cost and
 limitations: field-reconstruction-losses.md; evidence: field-loss-verification.md.
+
+## 30 October2026 — joint latent replacement contract
+
+The supplied PDF leaves known-group masking and latent normalization open. Adopt
+fixed full-state targets, mask known scalar slots in flow and decode through typed
+known context; unknown scalar uses its dedicated bounded head. This preserves one
+representation across disclosure masks. docs/joint-latent-model.md establishes the
+shapes and semantics before code. The earlier project/architecture descriptions of
+stacked-frame and solution-only models are historical evidence, superseded for
+active heat playground training by the joint model. Their scientific outputs and
+all existing checkpoints remain untouched; other PDE numerical modules and the
+broader 1D–3D chemistry goal remain. A heat2D joint slice does not imply a trained
+spatial-coefficient, Darcy or chemistry joint generator.
+
+## Operator-aware extension —30 October2026
+
+Replace v1 complete-trajectory groups by initial_u/initial_v/coefficient with
+within-group representation pathways and coupled generative flow. A shared
+heat/wave first-order state supports wave composition only with BOTH u and v.
+Use staged A1 representation, A2 learned direct-time evolution, B frozen-target
+CFM; optional decoded auxiliary stays explicit. Static/weak branches are interfaces
+with unsupported execution, not success-returning placeholders. Smooth periodic
+local kernels replace hard nearest-anchor routing for strong residuals. Full
+pre-implementation contracts are in operator-wave-model.md.
+
+### Final shared operator integration —30 October2026
+
+The project specification permits specialists and calls joint training experimental;
+the current user request specifically requires one shared heat/wave model. We retain
+the modular research goal while making the active2D dynamic model shared. This is a
+bounded adaptation of the supplied extension PDF, not evidence for arbitrary PDEs.
+Old trajectory/test contracts were replaced by physical-state contracts; their source
+snapshots and all existing checkpoint hashes are preserved in the task evidence.
+
+The spatial decoder receives neither physical time nor an unrestricted trajectory
+latent. A2 evolves complete(u,v) wave states; identity is structural, composition and
+conservation are measured/soft. A single typed edge-aware graph enters flow and
+transition; executable physics still comes from an explicit smooth registry. JSON
+list/tuple normalization uses canonical digest equality at the API boundary. Typed
+known scalars are authoritative; unknown true scalars and full reference u/v never
+enter reconstruction. Explicit-noise CPU/MPS tests and API forbidden-input tests
+cover both families. Hard local-neighbour selection is replaced by smooth all-anchor
+weights for derivatives. Wave Nyquist splitting defines the finite interpolant.
+
+Field/quantity losses average within examples before batch/family aggregation;
+observation and supervision placements stay separate. Time-mixture uniform components
+use32 jittered phase strata; all sampling generators and stage dependencies resume.
+Preview scale calibration is bounded and explicitly approximate; actual run transforms
+use the full recorded training-only calibration. Effective example accounting is
+persisted across resumes, including changed batch-size attempts. Component clocks are
+host-inclusive; only synchronized step wall time supports elapsed-time reporting.
+No substantial training or CUDA run was used to qualify the architecture.
+
+### Training-equation routing audit —30 October2026
+
+The focused training page hid the selector and initialized its request from the
+playground PDE. Consequently opening it from Heat selected actual heat-only data,
+although both scalar ranges were displayed. Explicit joint configuration already
+reached the correct shared trainer; the defect was both presentation and intent
+routing. Advanced family_weights could also contradict the selector/summary.
+
+New local/UI/API/CLI training defaults to Heat + Wave, with a visible independent
+Training equations selector. The resolved summary comes from validated family_weights
+and the registered state schemas, not the playground or an equation-name heuristic.
+Advanced weights may adjust proportions within the selected family set; a different
+set rejects. Initial-field shape mixtures are explicitly distinguished from PDEs.
+Stage manifests/checkpoints persist normalized family probabilities and enabled state
+schemas, while batch histories record actual example counts. Existing raw configuration,
+loss identity, resume checks and numerical losses remain intact.
+
+Region-balanced alpha=.5 remains the new-run default. A1 applies it to heat u and
+wave u/v with separate reference-only region masks/normalizations; A2 uses the same
+decoded field objective through evolution plus its existing alignment/composition
+terms. B remains masked latent CFM. A two-update-per-stage CPU probe and an alpha0
+A1 control establish objective/gradient wiring only, not accuracy. Existing models
+and recorded resume objectives are unchanged. New metadata changes the scientific
+source fingerprint, so older checkpoints still need their recorded source for strict
+resume; inference compatibility is unchanged.

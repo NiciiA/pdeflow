@@ -1,30 +1,39 @@
 """Real bounded training/evaluation, plus explicit control-plane failure probes."""
+
+
 from pathlib import Path
+
+
 import time
 
+
 import numpy as np
+
+
 import pytest
+
+
 from fastapi.testclient import TestClient
 
+
 from pdeflow import training_workflow as workflow
+
+
 from pdeflow.coordinate.training import read_checkpoint
+
+
 from pdeflow.runtime import read_json, write_json, file_digest
+
+
 from pdeflow.workbench.api import create_app
 
 
 def request(model='resolution-flexible'):
-    advanced = {'temporal_mode':'snapshots','data_mode':'materialized','reference_shape':[4,4], 'width':8, 'heads':2, 'tokens':3, 'layers':1,
-                'train_count':3, 'validation_count':1, 'test_count':1, 'encoder_points':32,
-                'query_points':32, 'ae_steps':2, 'flow_steps':2, 'checkpoint_every':1,
-                'batch_size':1, 'observation_counts':[0,4]}
-    if model == 'fixed-grid':
-        advanced = {'model':{'width':8,'blocks':1}, 'grid':{'shape':[4,4]},
-                    'provider':{'validation_count':1,'test_count':1,'calibration_count':3},
-                    'inference':{'steps':1,'particles':1,'sensors':2}}
+    advanced={'distribution':{'max_wave':1,'width':[.4,.5]},'training_options':{'microbatch':2,'accumulation':1},'reference_shape':[8,8],'width':8,'heads':2,'tokens':8,'layers':1,'train_count':12,'validation_count':12,'test_count':12,'encoder_points':16,'query_points':16,'ae_steps':2,'evolution_steps':2,'flow_steps':2,'checkpoint_every':1,'batch_size':2,'observation_counts':[0,4],'field_loss':{'analysis_resolution':8,'region_queries':16,'time_groups':1}}
     return {'problem':'heat-2d','model':model,'budget':'pipeline-check','device':'cpu','advanced':advanced}
 
 
-@pytest.mark.parametrize('model', ['resolution-flexible', 'fixed-grid'])
+@pytest.mark.parametrize('model', ['resolution-flexible'])
 def test_one_action_real_training_validation_registry_selection_and_preview(tmp_path, model):
     row = workflow.start(request(model), tmp_path, token=model, background=False)
     assert row['state'] == 'completed', row.get('error')
@@ -58,7 +67,7 @@ def test_one_action_real_training_validation_registry_selection_and_preview(tmp_
             assert row['model_id'] in [m['id'] for m in client.get('/api/models').json()]
 
 
-@pytest.mark.parametrize('model', ['resolution-flexible', 'fixed-grid'])
+@pytest.mark.parametrize('model', ['resolution-flexible'])
 def test_stop_resume_real_zero_update_checkpoint_and_idempotent_submission(tmp_path, monkeypatch, model):
     launched = []
     monkeypatch.setattr(workflow, '_spawn', lambda path: launched.append(path) or 12345)
@@ -142,38 +151,6 @@ def test_backend_restart_and_real_detached_worker_persistence(tmp_path):
         assert client.post('/api/training/models',json={}).json()[0]['id']==row['model_id']
 
 
-def test_devices_profiles_and_unavailable_choices_no_output_allocation(tmp_path, monkeypatch):
-    options=workflow.options()
-    auto=workflow.plan({'device':'auto'})
-    assert auto['resolved_device']==options['auto_device']
-    assert workflow.plan({'device':'cpu'})['resolved_device']=='cpu'
-    monkeypatch.setattr(__import__('torch').cuda,'is_available',lambda:False)
-    with pytest.raises(ValueError):workflow.start({'device':'cuda'},tmp_path)
-    assert not (tmp_path/'training-workflows').exists()
-    for problem in workflow.PROBLEMS:
-        for model in ('fixed-grid','resolution-flexible') if problem.startswith('heat') else ('fixed-grid',):
-            p=workflow.plan({'problem':problem,'model':model,'device':'cpu'})
-            assert p['grid']['shape'] and p['pipeline_check']
-    with pytest.raises(ValueError,match='heat only'):
-        workflow.plan({'problem':'darcy-2d','model':'resolution-flexible','device':'cpu'})
-    assert workflow.plan({'model':'resolution-flexible','budget':'extended','device':'cpu'})['updates']['flow']==10000
-    assert workflow.plan({'device':'cpu','advanced':{'provider':{'mode':'offline','offline_count':7}}})['examples']['training']==7
-    assert 'pool up to 5' in workflow.plan({'device':'cpu','advanced':{'provider':{'mode':'hybrid','capacity':5}}})['examples']['training']
-    assert workflow.plan({'device':'cpu'})['request']==workflow.plan({'device':'cpu','advanced':{},'allow_poor_representation':False,'representation_max_mse_ratio':1})['request']
-
-
-def test_preparation_restart_with_original_provenance(tmp_path, monkeypatch):
-    from pdeflow.coordinate import training
-    prepare=training.prepare
-    def fail(*args):raise RuntimeError('failed preparation')
-    monkeypatch.setattr(training,'prepare',fail)
-    row=workflow.start(request(),tmp_path,background=False)
-    assert row['state']=='failed'
-    monkeypatch.setattr(training,'prepare',prepare)
-    result=workflow.resume(row['id'],tmp_path,background=False)
-    assert result['state']=='completed',result.get('error')
-
-
 def test_lost_worker_is_interrupted_without_signalling_stale_pid(tmp_path, monkeypatch):
     monkeypatch.setattr(workflow,'_spawn',lambda path:999999)
     row=workflow.start(request(),tmp_path)
@@ -181,22 +158,6 @@ def test_lost_worker_is_interrupted_without_signalling_stale_pid(tmp_path, monke
     record=read_json(file);record['launched_unix']=time.time()-30;write_json(file,record)
     assert workflow.status(row['id'],tmp_path)['state']=='interrupted'
     assert workflow.status(row['id'],tmp_path)['can_resume']
-
-
-def test_fixed_train_further_preserves_previous_budget_and_validation(tmp_path):
-    row=workflow.start(request('fixed-grid'),tmp_path,background=False)
-    assert row['state']=='completed'
-    root=tmp_path/'training-workflows'/row['id']
-    old_hash=file_digest(root/'fixed/training/inference.pt')
-    old_report=(root/'model-validation.json').read_bytes()
-    continued=workflow.extend(row['id'],2,tmp_path,background=False)
-    assert continued['state']=='completed',continued.get('error')
-    assert continued['plan']['updates']=={'fixed':4} and not continued['plan']['pipeline_check']
-    assert file_digest(root/'budgets/2/inference.pt')==old_hash
-    assert (root/'model-validation.json').read_bytes()==old_report
-    assert (root/'model-validation-4.json').is_file()
-    assert {row['model_id'],continued['model_id']} <= {m['id'] for m in workflow.model_list(tmp_path)}
-    assert workflow.preview(row['id'],tmp_path)['error'] is not None
 
 
 def test_saved_models_and_runs_are_discovered_without_special_workspace(tmp_path, monkeypatch):

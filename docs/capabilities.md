@@ -1,5 +1,46 @@
 # Capability matrix
 
+## Active operator-aware physical-state v2 —30 October2026
+
+| Capability | Implemented / available / smoke-trained | Scientific status |
+|---|---|---|
+| One shared periodic heat/wave2D model | Real shared A1/A2/B, typed u/v/D/c masks and heads; final two-update export available | Poor accuracy, no joint-training advantage demonstrated |
+| Directed typed PDE graph | Ordered argument edges, type/unit/order checks, safe registered parser, permutation/forward-gradient tests | Structured conditioning; not symbolic solving or novel-PDE generalization |
+| Training equation selection | Visible independent Heat / Wave / joint selector; actual API/data/stage metadata and gradient audit | Execution verified on tiny CPU budgets; no accuracy claim |
+| Learned physical-time evolution | Complete wave state, identity/static scalar, decoded/latent alignment and composition | No exact semigroup/conservation guarantee |
+| Wave numerical reference | Analytic/zero/Nyquist/energy/non-square/arbitrary-time checks | Finite spectral reference, not learned prediction |
+| Known/unknown D and c | Real API/browser through same checkpoint; explicit-noise CPU/MPS inference | Potentially ambiguous; scalar accuracy unestablished |
+| UI displacement/velocity | Independent drawing/presets, selected-quantity observations/profiles/errors, coherent time queries | Predictions remain smoke quality |
+| Region-balanced objective | Actual A1/A2 decoded gradients, separate signed u/v regions; α=.5 new-run default | Experimental; no improvement demonstrated |
+| Portable inference | Training-only state encoder/data omitted; graph/evolution/flow/decoders embedded | CPU/MPS executed; CUDA/actual Colab untested |
+| Capacity ladder | Smoke through XLarge, exact total252.7M Large /644.3M XLarge counts | Large hardware fit/throughput/quality unmeasured |
+| Static/weak/forced/new boundaries or neural1D/3D | Explicitly unsupported in this specialist | Future modules; historical numerics remain |
+
+Detailed contracts/counts: operator-wave-model.md. Actual saved evidence and limitations:
+operator-wave-verification.md. The tables below retain historical research records;
+they do not declare old generative weights compatible with the active workflow.
+
+
+
+## Historical joint-v1 generator —30 October2026
+
+| Capability | Implementation / evidence | Scientific status |
+|---|---|---|
+| Structured joint u/u0/D latents | Shared global/local groups, typed conditioning, frozen AE + masked equal-group CFM; CPU/MPS tiny execution | No accuracy/identifiability validation |
+| Known/unknown D in same heat2D model | Actual browser reconstruction in both modes; no full hidden initial/D conditioning | Ambiguous sparse inverse problem; bounded prior |
+| Continuous physical time and coordinate queries | Preserved [0,1], fixed latent across frames; periodic/chunk/derivative tests | Resolution flexibility, not demonstrated fine-detail recovery |
+| Region-balanced field objective | Real encoder/decoder gradients, alpha=.5 new UI/Colab default, scalar/latent losses separate | Experimental; no demonstrated improvement |
+| Portable decoder/flow export | No training encoder/data dependency, CPU-first reload and explicit-noise MPS agreement | CUDA/actual Colab untested |
+| Large capacities / Custom | Exact meta counts through XLarge465,820,675 total stage parameters; no capacity cap | Hardware fit and useful training unmeasured |
+| Optional decoded auxiliary / correction | Explicit real-gradient tests; frozen decoder; known groups fixed; uncorrected outputs retained | No posterior guarantee or scientific benefit study |
+
+Detailed source and execution limits: joint-latent-model.md and
+joint-latent-verification.md. The tables below retain historical implementation
+and scientific evidence. Their old generative checkpoints are incompatible with
+the current normal workflow; numerical reference functionality remains available.
+
+## Historical research capabilities
+
 Evidence refers to the source in this repository and docs/verification.md.
 "Trained" below means actual bounded optimizer execution, not scientific
 accuracy. "Numerically verified" means analytic/convergence/gradient checks,

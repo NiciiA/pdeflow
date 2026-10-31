@@ -1,0 +1,145 @@
+{
+  "ae_steps": 10000,
+  "animation_frames": 31,
+  "batch_size": 8,
+  "checkpoint_every": 500,
+  "data_mode": "procedural",
+  "diffusivity_range": [
+    0.03,
+    0.12
+  ],
+  "dimension": 2,
+  "distribution": {
+    "amplitude": [
+      0.4,
+      1.2
+    ],
+    "background": [
+      -0.5,
+      0.5
+    ],
+    "max_wave": 4,
+    "width": [
+      0.1,
+      0.2
+    ]
+  },
+  "encoder_points": 512,
+  "evolution": {},
+  "evolution_steps": 10000,
+  "family_weights": {
+    "heat": 0.5,
+    "wave": 0.5
+  },
+  "field_loss": {
+    "absolute_threshold": 0.01,
+    "alpha": 0.5,
+    "analysis_resolution": 32,
+    "contrast_strength": 2.0,
+    "estimator": "grouped_stratified_v1",
+    "minimum_area_fraction": 0.003,
+    "numerical_relative_floor": 1e-06,
+    "region_queries": 256,
+    "relative_threshold": 0.25,
+    "smoothing_fraction": 0.0,
+    "time_groups": 4,
+    "type": "region_balanced_mse"
+  },
+  "flow_steps": 10000,
+  "frequencies": 3,
+  "heads": 8,
+  "joint": {
+    "auxiliary": {
+      "field": 0.0,
+      "minimum_s": 0.5,
+      "observation": 0.0,
+      "pde": 0.0
+    },
+    "context_depth": 1,
+    "decoder_chunk": 1024,
+    "decoder_depth": 3,
+    "encoder_depth": 4,
+    "group_weights": {
+      "coefficient": 1.0,
+      "initial_u": 1.0,
+      "initial_v": 1.0
+    },
+    "initial_field_loss": null,
+    "known_probability": 0.5,
+    "latent_regularization": 1e-05,
+    "local_neighbors": 4,
+    "observation_depth": 1,
+    "observation_tokens": 32,
+    "target_cache": true,
+    "warmup_disclosure_coverage": true
+  },
+  "layers": 12,
+  "learning_rate": 0.0003,
+  "lengths": [
+    1.0,
+    1.0
+  ],
+  "noise_range": [
+    0.0,
+    0.05
+  ],
+  "observation_counts": [
+    1,
+    64
+  ],
+  "observation_placement": {},
+  "origins": [
+    0.0,
+    0.0
+  ],
+  "query_points": 256,
+  "reference_shape": [
+    32,
+    32
+  ],
+  "runtime": {
+    "device": "cuda",
+    "dtype": "float32",
+    "threads": 2
+  },
+  "seed": 73,
+  "temporal_mode": "continuous",
+  "test_count": 256,
+  "time_interval": [
+    0.0,
+    1.0
+  ],
+  "time_sampling": {},
+  "times": [
+    0.0,
+    0.05,
+    0.1,
+    0.15
+  ],
+  "tokens": 256,
+  "train_count": 8192,
+  "training_options": {
+    "autoencoder": {
+      "schedule": "cosine",
+      "warmup": 1000
+    },
+    "broad_every": 5000,
+    "broad_subset": 48,
+    "calibration_count": 512,
+    "flow": {
+      "schedule": "cosine",
+      "warmup": 1000
+    },
+    "observation_locations": "scattered",
+    "precision": "auto",
+    "validation_every": 500,
+    "validation_subset": 12
+  },
+  "unconditional_probability": 0.0,
+  "validation_count": 256,
+  "wave_speed_range": [
+    0.2,
+    0.6
+  ],
+  "width": 512
+}

@@ -86,6 +86,8 @@ def inventory(root):
         key=str(owner.relative_to(root)) or '.'
         d=_json(owner/'run.json');group=groups.setdefault(key,{'id':key,'name':f'{d.get("specialist","Heat" if cp.get("stage") else "PDE")} · {d.get("stage", "fixed grid")} · {owner.name}',
             'files':[],'active':False,'dependencies':[],'model_ids':[],'dataset_ids':[],'owners':[str(owner),str(p.parent)]})
+        group['architecture_status']='Current joint model' if cp.get('architecture')=='operator_aware_physical_latent_v2' else 'Legacy architecture — incompatible with current model';
+        if group['architecture_status'].startswith('Legacy') and 'Legacy' not in group['name']:group['name']+=' · '+group['architecture_status']
         group['files'].append(str(p.relative_to(root)));group['model_ids'].append(file_digest(p)[:32])
         group['active']|=any(p.is_relative_to(a) for a in active_roots) or _locked(p.parent)
         group['active']|=bool(active_ids.intersection(group['model_ids']))

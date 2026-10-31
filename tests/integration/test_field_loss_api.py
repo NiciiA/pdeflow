@@ -8,14 +8,15 @@ from pdeflow.coordinate.dataset import Dataset
 from pdeflow.coordinate.contracts import CoordinateConfig
 
 
-def test_new_plan_default_and_exact_training_preview(tmp_path):
+def test_new_plan_default_and_bounded_training_preview(tmp_path):
     request={'problem':'heat-2d','model':'resolution-flexible','budget':'pipeline-check','device':'cpu'}
     result=plan(request);assert result['config']['field_loss']['type']=='region_balanced_mse' and result['config']['field_loss']['alpha']==.5
     with TestClient(create_app(workspace=tmp_path)) as client:
         response=client.post('/api/training/loss-preview',json=request);assert response.status_code==200,response.text
-        preview=response.json();assert preview['split']=='train' and len(preview['examples'])==6
+        preview=response.json();assert preview['split']=='train' and len(preview['examples'])==12
         dataset=Dataset(CoordinateConfig(**result['config']).validate(),tmp_path/'preview-calibration')
-        assert preview['examples'][0]['training_calibration_scale']==dataset.metadata['normalization']['scale']
+        assert preview['examples'][0]['training_calibration_scale']>0
+        assert 'Preview-only scale estimate' in preview['meaning']
         assert all(e['id'].startswith('train:') for e in preview['examples'])
 
 

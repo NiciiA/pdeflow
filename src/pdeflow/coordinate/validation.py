@@ -1,74 +1,97 @@
-"""Bounded representative validation; full reference remains evaluation-only."""
+"""Held-out, physical-unit diagnostics for all three shared model stages."""
 from pathlib import Path
 import time
 import numpy as np
 import torch
 from pdeflow.runtime import write_json,atomic_write,file_digest,RuntimeSpec
 from pdeflow.core import GridSpec,DomainSpec
-from .dataset import Dataset
-from .model import Autoencoder,decode_chunks
-from .training import read_checkpoint,select_context,normalized_parameter,data_config
-from .evaluation import error_summary,common_grid_diagnostics,interpolate_grid
+from .dataset import Dataset,state_samples
+from .model import Autoencoder
+from .training import read_checkpoint,normalized_parameter
+from .physics import problem,family_index,get,invariant_drift
 from .contracts import grid_queries
+from .evaluation import error_summary,spectral_diagnostics
+from pdeflow.field_losses import trajectory_metrics
+
+
+def evaluation_grid(c,resolution=16):
+    return GridSpec((resolution,resolution),DomainSpec(c.lengths,c.origins),(0.,.01,.05,.1,.237,.5,.75,1.))
+
+
+def temporal_errors(prediction,reference,times,interval=(0.,1.)):
+    a=np.asarray(prediction).reshape(len(times),-1);b=np.asarray(reference).reshape(a.shape);mse=np.mean((a-b)**2,1);t=np.asarray(times)
+    return {'physical_times':list(times),'rmse_per_physical_time':np.sqrt(mse).tolist(),'initial_rmse':float(np.sqrt(mse[0])),
+       'early_rmse':float(np.sqrt(mse[t<=.1].mean())),'uniform_space_time_mse':float(np.trapezoid(mse,t)/(t[-1]-t[0])),
+       'uniform_metric_definition':'Spatial uniform node mean, trapezoidal quadrature in physical time on the explicitly recorded nonuniform evaluation times; not training-weighted loss'}
+
+
+def _data(cp,c,checkpoint):
+    root=Path(checkpoint).parent
+    if cp.get('dataset_root'):root=(root/cp['dataset_root']).resolve()
+    elif cp.get('dependency'):
+        dep=(root/cp['dependency']['path']).resolve();other,_=read_checkpoint(dep);return _data(other,c,dep)
+    return Dataset(c,root,False)
 
 
 def representation(checkpoint,output,device='cpu',split='validation',subset=8,allow_partial=False):
-    cp,c=read_checkpoint(checkpoint,'autoencoder')
-    if c.temporal_mode=='continuous':
-        from .temporal_validation import representation as evaluate
-        return evaluate(checkpoint,output,device,split,subset,allow_partial)
-    if not (cp['completed'] or allow_partial) or split not in ('validation','test'):raise ValueError('Representation validation requires a completed stage and explicit held-out split')
-    if Path(output).exists():raise FileExistsError('Validation output exists; select a fresh report')
-    data=Dataset(c,Path(checkpoint).parent,False);n=cp['normalization'];dev,_=RuntimeSpec(device=device).resolve()
-    ae=Autoencoder(c).to(dev).eval().requires_grad_(False);ae.load_state_dict(cp['autoencoder']);grid=data_config(c).grid;records=[];previews=[];started=time.perf_counter()
+    return physical(checkpoint,output,device,split,subset,allow_partial,'autoencoder')
+
+
+def evolution(checkpoint,output,device='cpu',split='validation',subset=8,allow_partial=False):
+    return physical(checkpoint,output,device,split,subset,allow_partial,'evolution')
+
+
+def physical(checkpoint,output,device,split,subset,allow_partial,stage):
+    cp,c=read_checkpoint(checkpoint,stage)
+    if not (cp['completed'] or allow_partial) or split not in ('validation','test'):raise ValueError('Requires a completed stage and explicit held-out split')
+    if Path(output).exists():raise FileExistsError('Choose a fresh validation report')
+    data=_data(cp,c,checkpoint);dev,_=RuntimeSpec(device=device,threads=2).resolve();ae=Autoencoder(c).to(dev).eval().requires_grad_(False);ae.load_state_dict(cp['autoencoder']);grid=evaluation_grid(c);xy=grid_queries(GridSpec(grid.shape,grid.domain,(0.,)))[:,:2].to(dev);records=[];previews=[];started=time.perf_counter()
     with torch.no_grad():
         for i in range(min(subset,c.validation_count if split=='validation' else c.test_count)):
-            y,d,items=data.batch([i],split);cq,cv=select_context(data.q,(y-n['mean'])/n['scale'],c);p=normalized_parameter(c,d).to(dev)
-            z=ae.encode(cq[None].to(dev),cv.to(dev),p);a=(decode_chunks(ae,z,data.q.to(dev),p)*n['scale']+n['mean']).cpu().numpy()
-            truth=y.numpy();shape=(len(c.times),*c.reference_shape);pred=a.reshape(shape);ref=truth.reshape(shape);axes=tuple(range(1,len(shape)))
-            sa=np.abs(np.fft.rfftn(pred,axes=axes))**2;sb=np.abs(np.fft.rfftn(ref,axes=axes))**2
-            field_report=None
-            if c.dimension==2:
-                from pdeflow.field_losses import trajectory_metrics
-                field_report=trajectory_metrics(pred,ref,c.times,c.lengths,c.field_loss,n['scale'])
-            records.append({'field_metrics':field_report,'id':items[0]['id'],'family':items[0]['family'],**error_summary(a,truth[0]),
-               'initial_rmse':float(np.sqrt(np.mean((pred[0]-ref[0])**2))),'rmse_per_physical_time':np.sqrt(np.mean((pred-ref)**2,axis=axes)).tolist(),
-               'spectral_power_relative_l2':float(np.linalg.norm(sa-sb)/max(np.linalg.norm(sb),1e-12)),
-               'constant_baseline_mse':float(np.mean((truth-n['mean'])**2)),**common_grid_diagnostics(a,grid,float(d[0]))})
-            if len(previews)<6:previews.append(np.stack([ref,pred,np.abs(ref-pred)]))
-    baseline=float(np.mean([r['constant_baseline_mse'] for r in records]));mse=float(np.mean([r['mse_per_sample'][0] for r in records]))
-    report={'stage':'autoencoder','checkpoint_sha256':file_digest(checkpoint),'split':split,'records':records,'seconds':time.perf_counter()-started,
-       'constant_baseline_mse':baseline,'validation_mse':mse,'mse_ratio':mse/baseline if baseline>1e-15 else None,'dataset_identity':data.metadata['sha256'],
-       'meaning':'Complete field encoder reconstruction on fixed held-out solutions. Not observation-only generation. Baseline fitted to training calibration only.'}
-    write_json(output,report);atomic_write(Path(output).with_suffix('.npz'),lambda f:np.savez_compressed(f,preview=np.asarray(previews)))
-    return report
+            item=data.get(split,i);family=item['family'];f=torch.tensor([family_index(family)],device=dev);p=normalized_parameter(c,torch.tensor([item['parameter']],device=dev),f);known=torch.ones(1,dtype=torch.bool,device=dev);norms=cp['normalizations'][family];cq=torch.tensor(item['context'],device=dev)[None]
+            encode=lambda t:ae.encode(cq,state_samples(item,item['context'],t,c,norms).to(dev)[None],p,f)
+            zinit=encode(0.);preds=[[],[]];truths=[[],[]];composition=[]
+            for t in grid.times:
+                z=encode(t) if stage=='autoencoder' else ae.evolve(zinit,0.,t,p,known,f)
+                for j,name in enumerate(get(family).state):
+                    preds[j].append((ae.decode_state(z,xy,j,f)[0]*norms[j]['scale']+norms[j]['mean']).cpu().numpy().reshape(grid.shape));truths[j].append(item['solver'].frame(t,item['parameter'],c.interval,grid.shape,name))
+                via=ae.evolve(ae.evolve(zinit,0.,t/2,p,known,f),t/2,t,p,known,f)
+                if stage=='evolution':composition.append({'time':t,'latent_mse':float((via-z).square().mean()),'decoded_normalized_mse':float(torch.stack([(ae.decode_state(via,xy,j,f)-ae.decode_state(z,xy,j,f)).square().mean() for j in range(len(get(family).state))]).mean())})
+            quantities={}
+            for j,name in enumerate(get(family).state):
+                a=np.asarray(preds[j]);b=np.asarray(truths[j]);base=np.full_like(b,norms[j]['mean']);metrics=temporal_errors(a,b,grid.times,c.interval);baseline=temporal_errors(base,b,grid.times,c.interval)['uniform_space_time_mse'];sa=np.abs(np.fft.rfft2(a))**2;sb=np.abs(np.fft.rfft2(b))**2
+                quantities[name]={**error_summary(a.reshape(1,-1),b.ravel()),**metrics,'phase_amplitude':spectral_diagnostics(a,b),'constant_baseline_mse':baseline,'normalized_validation_mse':metrics['uniform_space_time_mse']/norms[j]['scale']**2,'normalized_constant_baseline_mse':baseline/norms[j]['scale']**2,'spectral_power_relative_l2':float(np.linalg.norm(sa-sb)/max(np.linalg.norm(sb),1e-12)), 'field_metrics':trajectory_metrics(a,b,grid.times,c.lengths,c.field_loss,norms[j]['scale'])}
+                if len(previews)<8:previews.append(np.stack([b,a,np.abs(a-b)]))
+            scalar=float(ae.decode_parameter(zinit,p,torch.zeros_like(known),True,f)[0]);records.append({'id':item['id'],'family':family,'case':item['case'],'quantities':quantities,'composition':composition,'parameter_error':abs(scalar-item['parameter']),'initial_identity_max_error':float((ae.evolve(zinit,0.,0.,p,known,f)-zinit).abs().max()),'invariants':invariant_drift(np.asarray(preds[0]),np.asarray(preds[1]) if family=='wave' else None,grid.times,c.lengths,item['parameter'])})
+    # Equal examples within family, equal quantities within example, equal enabled families.
+    def aggregate(key):return float(np.mean([np.mean([np.mean([q[key] for q in r['quantities'].values()]) for r in records if r['family']==f]) for f in c.family_weights if any(r['family']==f for r in records)]))
+    mse=aggregate('normalized_validation_mse');baseline=aggregate('normalized_constant_baseline_mse')
+    report={'stage':stage,'checkpoint_sha256':file_digest(checkpoint),'split':split,'records':records,'validation_mse':mse,'constant_baseline_mse':baseline,'mse_ratio':mse/baseline if baseline>1e-15 else None,'aggregation':'Equal family, example and active quantity; aggregate gate uses training-normalized MSE, constant baseline uses identical normalization/objective. Physical per-quantity metrics retained.','seconds':time.perf_counter()-started,'dataset_identity':data.metadata['sha256'],'meaning':'Complete reference state encoding for A1; encoded INITIAL state then learned evolution for A2. Not observation-only reconstruction; tiny training is not accuracy validation.'}
+    write_json(output,report);atomic_write(Path(output).with_suffix('.npz'),lambda f:np.savez_compressed(f,preview=np.asarray(previews)));return report
 
 
-def flow(checkpoint,output,device='cpu',subset=6,split='validation',counts=None,noises=None,particles=2,steps=4,resolution=16,allow_partial=False):
+def flow(checkpoint,output,device='cpu',subset=6,split='validation',counts=None,noises=None,particles=2,steps=4,resolution=16,allow_partial=False,placements=None,seeds=None):
     from .inference import CoordinateBundle
-    from pdeflow.equations import heat_problem
+    from pdeflow.heat_placement import place
     if split not in ('validation','test'):raise ValueError('Choose an explicit held-out split')
-    bundle=CoordinateBundle(checkpoint,device,allow_partial=allow_partial);c=bundle.config
-    if c.temporal_mode=='continuous':
-        from .temporal_validation import flow as evaluate
-        return evaluate(checkpoint,output,device,subset,split,counts,noises,particles,steps,resolution,allow_partial)
-    # Portable checkpoint carries weights; data is required ONLY for held-out evaluation.
-    dependency=(Path(checkpoint).parent/bundle.cp['dependency']['path']).resolve();data=Dataset(c,dependency.parent,False)
-    shape=tuple(min(resolution,n) for n in c.reference_shape);grid=GridSpec(shape,DomainSpec(c.lengths,c.origins),c.times);queries=grid_queries(grid)
-    counts=counts or sorted(set([max(1,c.observation_counts[0]),min(16,c.observation_counts[1]),c.observation_counts[1]]));noises=noises or sorted(set([0.,c.noise_range[1]]))
-    records=[];preview=None;started=time.perf_counter()
+    if Path(output).exists():raise FileExistsError('Choose a fresh report')
+    bundle=CoordinateBundle(checkpoint,device,allow_partial);c=bundle.config;data=_data(bundle.cp,c,checkpoint);grid=evaluation_grid(c,resolution);q=grid_queries(grid);records=[];previews=[];started=time.perf_counter();counts=counts or [min(12,c.observation_counts[1])];noises=noises if noises is not None else [0.];seeds=seeds or [91];placements=placements or ['random']
     for i in range(min(subset,c.validation_count if split=='validation' else c.test_count)):
-        item=data.get(split,i);y=item['values'];p=heat_problem(grid,item['D']);truth=interpolate_grid(y.reshape(len(c.times),*c.reference_shape),data_config(c).grid,queries.numpy())
-        for count in counts:
-            for sigma in noises:
-                g=torch.Generator().manual_seed(c.seed+10000+i);ids=torch.randperm(len(data.q),generator=g)[:min(count,len(data.q))];observed=torch.tensor(y)[ids]+sigma*torch.randn(len(ids),generator=g)
-                rows=[{'field':'u',**{a:float(q[j]) for j,a in enumerate(grid.axis_names)},'time':float(q[-1]),'value':float(v),'sigma':sigma} for q,v in zip(data.q[ids],observed)]
-                samples,diagnostic=bundle.sample(p,rows,queries,steps=steps,particles=particles,seed=91,chunk_size=512)
-                row={'id':item['id'],'family':item['family'],'count':len(rows),'sigma':sigma,**error_summary(samples,truth),
-                     'rmse_per_physical_time':np.sqrt(np.mean((samples.mean(0)-truth).reshape(len(c.times),-1)**2,axis=1)).tolist(),
-                     'sensor_consistency':diagnostic['observation_consistency'],'physics':diagnostic['physics'],'seconds':diagnostic['seconds']}
-                records.append(row)
-                if preview is None:preview=np.stack([truth.reshape(len(c.times),*shape),samples.mean(0).reshape(len(c.times),*shape),np.abs(samples.mean(0)-truth).reshape(len(c.times),*shape)])
-    report={'checkpoint_sha256':file_digest(checkpoint),'split':split,'records':records,'settings':{'subset':subset,'counts':counts,'noises':noises,'particles':particles,'heun_steps':steps,'query_shape':shape,'time':list(c.times),'seed':91},'seconds':time.perf_counter()-started,'meaning':'Fixed held-out solutions, individual samples and ensemble mean separate; spread is not calibrated confidence. Test split only when explicitly requested.'}
-    write_json(output,report);atomic_write(Path(output).with_suffix('.npz'),lambda f:np.savez_compressed(f,preview=preview))
-    return report
+        item=data.get(split,i);family=item['family'];parameter=get(family).parameter
+        for known in (True,False):
+            for count in counts:
+                for sigma in noises:
+                    for seed in seeds:
+                        for placement in placements:
+                            xy,provenance=place(count,placement,seed,c.lengths,c.origins,field=item['solver'].frame(.237,item['parameter'],c.interval,(32,32)) if placement=='heat' else None);rng=np.random.default_rng(seed);at=rng.uniform(0,1,count);ids=rng.integers(2,size=count) if family=='wave' else np.zeros(count,dtype=int);rows=[]
+                            for j,name in enumerate(get(family).state):
+                                ix=ids==j;coord=np.c_[xy[ix],at[ix]];values=item['solver'].evaluate(coord,item['parameter'],c.interval,name)+sigma*rng.normal(size=ix.sum())
+                                rows.extend({'field':name,'x':float(x),'y':float(y),'time':float(t),'value':float(v),'sigma':sigma,'sampling':provenance} for (x,y,t),v in zip(coord,values))
+                            samples,diag=bundle.sample(problem(grid,family,item['parameter'] if known else None),rows,q,steps,particles,seed);quantities={}
+                            for j,name in enumerate(get(family).state):
+                                a=samples if j==0 else bundle.velocity_samples;truth=item['solver'].evaluate(q.numpy(),item['parameter'],c.interval,name);shape=(len(grid.times),*grid.shape);pred=a.mean(0).reshape(shape);ref=truth.reshape(shape)
+                                quantities[name]={**error_summary(a,truth),**temporal_errors(pred,ref,grid.times,c.interval),'phase_amplitude':spectral_diagnostics(pred,ref),'field_metrics':trajectory_metrics(pred,ref,grid.times,c.lengths,c.field_loss,bundle.cp['normalizations'][family][j]['scale'])}
+                                if len(previews)<8:previews.append(np.stack([ref,pred,np.abs(pred-ref)]))
+                            records.append({'id':item['id'],'family':family,'case':item['case'],'parameter_status':'known' if known else 'unknown','quantities':quantities,'parameter_absolute_errors':[abs(x-item['parameter']) for x in diag['inferred_parameters'][parameter]],'sensor_consistency':diag['observation_consistency'],'physics':diag['physics'],'seconds':diag['seconds'],'placement':provenance})
+    report={'checkpoint_sha256':file_digest(checkpoint),'split':split,'records':records,'seconds':time.perf_counter()-started,'settings':{'query_shape':grid.shape,'times':grid.times,'counts':counts,'noises':noises,'seeds':seeds,'steps':steps},'meaning':'Known AND unknown typed scalar modes; only explicit u/v rows condition generation. Reference initial fields/velocity/unknown scalar are evaluation-only. Same shared checkpoint. No accuracy or identifiability guarantee.'}
+    write_json(output,report);atomic_write(Path(output).with_suffix('.npz'),lambda f:np.savez_compressed(f,preview=np.asarray(previews)));return report

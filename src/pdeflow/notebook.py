@@ -7,7 +7,7 @@ from pdeflow.runtime import read_json
 def status(session):
     root=session.root;record=read_json(root/'session.json') if (root/'session.json').exists() else {'state':'not started'}
     stages=[]
-    for name in ('autoencoder','flow'):
+    for name in ('autoencoder','evolution','flow'):
         p=root/name/'run.json'
         if p.exists():stages.append(read_json(p))
     active=next((s for s in stages if s['state'] in ('preparing','running')),stages[-1] if stages else None)
@@ -24,7 +24,7 @@ def status(session):
     record['persistent_bytes']=sum(p.stat().st_size for p in session.persistent.rglob('*') if p.is_file()) if session.persistent.exists() else 0
     return record
 
-def display_status(session):
+def display_status(session,plots=True):
     from IPython.display import display,clear_output
     import matplotlib.pyplot as plt
     r=status(session);clear_output(wait=True)
@@ -36,14 +36,14 @@ def display_status(session):
     print('GPU memory:',r.get('memory'),'· last persistent checkpoint:',r.get('persistent_checkpoint'))
     print('Local / persistent bytes:',r['local_bytes'],r['persistent_bytes'])
     h=r.get('history',[])
-    if h:
+    if h and plots:
         fig,ax=plt.subplots(figsize=(7,2));ax.plot([v['step'] for v in h],[v['training_loss'] for v in h],label='training objective')
         val=[v for v in h if 'validation_loss' in v]
         if val:ax.plot([v['step'] for v in val],[v['validation_loss'] for v in val],label='fixed validation objective')
         ax.legend();ax.set_xlabel('Optimizer updates');display(fig);plt.close(fig)
     candidates=[session.root/'flow-validation.npz',session.root/'flow/validation-preview.npz',session.root/'representation-validation.npz',session.root/'autoencoder/validation-preview.npz']
     p=next((p for p in candidates if p.exists()),None)
-    if p:
+    if p and plots:
         with np.load(p,allow_pickle=False) as a:preview=a['preview']
         if preview.ndim==5:preview=preview[0]
         if preview.ndim==4:
@@ -52,11 +52,18 @@ def display_status(session):
             display(fig);plt.close(fig)
     return {k:v for k,v in r.items() if k not in ('history','config','validation')}
 
-def run(session,**kwargs):
-    stop=threading.Event()
+def run(session,refresh_seconds=10,plot_seconds=120,**kwargs):
+    if not 1<=refresh_seconds<=3600 or plot_seconds<refresh_seconds:raise ValueError("Notebook refresh must be1..3600 seconds and plot interval at least refresh interval")
+    stop=threading.Event();last_plot=[0.];output_seconds=[0.]
     def watch():
-        while not stop.wait(10):
-            try:display_status(session)
+        while not stop.wait(refresh_seconds):
+            try:
+                tick=time.perf_counter();plots=tick-last_plot[0]>=plot_seconds
+                display_status(session,plots)
+                if plots:last_plot[0]=tick
+                output_seconds[0]+=time.perf_counter()-tick
+                from pdeflow.runtime import write_json
+                write_json(session.root/'notebook-output-timing.json',{'seconds':output_seconds[0],'refresh_seconds':refresh_seconds,'plot_seconds':plot_seconds,'meaning':'Host display overhead, separate from training step time'})
             except (OSError,ValueError):pass # transient display reads never stop science
     worker=threading.Thread(target=watch,daemon=True);worker.start()
     try:return session.run(**kwargs)

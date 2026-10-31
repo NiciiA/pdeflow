@@ -10,3 +10,5 @@ recursive-include notebooks *.ipynb
 include frontend/package.json frontend/package-lock.json frontend/tsconfig.json frontend/vite.config.ts frontend/components.json frontend/index.html frontend/eslint.config.js frontend/playwright.config.ts frontend/THIRD_PARTY.md
 recursive-include frontend/src *.ts *.tsx *.css
 recursive-include frontend/e2e *.ts
+
+exclude notebooks/colab-legacy.ipynb

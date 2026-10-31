@@ -21,6 +21,8 @@ class Inverse(BaseModel):
     particles:int=Field(default=2,ge=1,le=16)
     seed:int=Field(default=91,ge=0,lt=2**63)
     chunk_size:int=Field(default=1024,ge=1,le=65536)
+    solver:str=Field(default='heun',pattern=r'^(euler|heun)$')
+    correction:dict|None=None
     device:str=Field(default='cpu',pattern=r'^(cpu|mps|cuda|auto)$')
     submission_token:str=Field(default_factory=lambda:uuid.uuid4().hex,max_length=80)
 
@@ -56,16 +58,20 @@ def register(app,workspace,data,output):
             if source.grid.domain!=p.grid.domain or source.grid.dimension!=p.grid.dimension or source.grid.convention!=p.grid.convention or source.grid.temporal_kind!=p.grid.temporal_kind or {**source.to_dict(),'grid':p.to_dict()['grid']}!=p.to_dict():raise ValueError('Current mathematical source differs from the executable physical problem; reparse the current draft')
             if payload.mathematical_request['measurements']['rows']!=payload.rows:raise ValueError('Coordinate source measurement rows differ from the submitted scalar set')
         if payload.require_continuous and c.temporal_mode!='continuous':raise ValueError('Legacy snapshot checkpoint is not continuously trained; train/import a continuous heat model or use legacy inference with its original support')
+        if payload.correction is not None:
+            from pdeflow.coordinate.consistency import Correction
+            try:Correction(**payload.correction).validate()
+            except TypeError as error:raise ValueError('Unsupported correction configuration') from error
         c.compatible(p);validate_rows(c,payload.rows,p);q=validate_queries(c,payload.queries if payload.queries is not None else grid_queries(p.grid))
         if not payload.rows and not cp['capabilities']['unconditional_trained']:raise ValueError('This model needs at least one measurement; its training did not include a zero-observation prior')
         if len(q)*payload.particles>16_777_216:raise ValueError('Decoded output exceeds64MiB budget')
         RuntimeSpec(device=payload.device).resolve()
-        return {'valid':True,'temporal':__import__('pdeflow.coordinate.temporal',fromlist=['capability']).capability(c),'query_count':len(q),'observations':len(payload.rows),'architecture':'set_latent_coordinate','training_reference_shape':c.reference_shape,'query_shape':p.grid.shape if payload.queries is None else None,'warning':'New query resolution does not establish learned fine-scale accuracy','zero_observation_prior_trained':cp['capabilities']['unconditional_trained']}
+        return {'valid':True,'temporal':__import__('pdeflow.coordinate.temporal',fromlist=['capability']).capability(c),'query_count':len(q),'observations':len(payload.rows),'architecture':cp['architecture'],'training_reference_shape':c.reference_shape,'query_shape':p.grid.shape if payload.queries is None else None,'warning':'New query resolution does not establish learned fine-scale accuracy','zero_observation_prior_trained':cp['capabilities']['unconditional_trained']}
 
     @app.post('/api/coordinate/reconstruct',status_code=202)
     def reconstruct(payload:Inverse):
         validate(payload);entry=model(workspace,payload.model_id)
-        request={'kind':'coordinate','model_id':payload.model_id,'problem':payload.problem,'rows':payload.rows,'queries':payload.queries,'inference':{'steps':payload.steps,'particles':payload.particles,'seed':payload.seed,'chunk_size':payload.chunk_size},'runtime':{'device':payload.device},'mode':'learned_observation_conditioning'}
+        request={'kind':'coordinate','model_id':payload.model_id,'problem':payload.problem,'rows':payload.rows,'queries':payload.queries,'inference':{'steps':payload.steps,'particles':payload.particles,'seed':payload.seed,'chunk_size':payload.chunk_size,'solver':payload.solver,'correction':payload.correction},'runtime':{'device':payload.device},'mode':'learned_observation_conditioning'}
         job=app.state.jobs.submit(request,entry['export'],payload.submission_token)
         if payload.mathematical_request is not None:write_json(contained(output,job['id'])/'mathematical-source.json',payload.mathematical_request)
         return job

@@ -10,6 +10,7 @@ def source_file(path: Path, root: Path) -> bool:
     """Exclude generated metadata, hidden files, caches and binary run data."""
     return (
         path.is_file()
+        and path.name != "colab-legacy.ipynb"
         and not path.is_symlink()
         and not any(part.startswith(".") or part.endswith(".egg-info") or part in {
             "__pycache__", "node_modules", "cache", "caches", "dist", "build"

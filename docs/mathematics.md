@@ -735,3 +735,68 @@ Global training normalization, exact thresholds/quadrature, importance factors,
 contribution maps and uniform validation/gate semantics are derived in
 field-reconstruction-losses.md. No temporal source identity or scientific benefit
 is claimed.
+
+## Structured joint latent flow —30 October2026
+
+Let T=(E(S)-mu_g)/sigma_g for complete state S=(u,u0,D), with train-only
+per-group/channel moments and sigma>=.01. Fixed slots do not change with disclosure.
+For active-slot mask m, draw xi~N(0,I) and independent generative s~U[0,1]:
+z_s=m*((1-s)*xi+s*T), target=m*(T-xi). The velocity output is also masked.
+For each solution, average velocity squared error over tokens/channels within each
+active logical group, then take a configured weighted mean over active groups;
+finally average solutions. Known scalar groups are excluded, not supervised as
+random targets. Partial solution fields remain active. No spatial region masks
+are assigned to latent tokens.
+
+Representation loss is (L_u+L_u0+MSE_log-range-D)/3 + lambda mean(z²), lambda1e-5.
+Field losses use field-reconstruction-losses.md; u0 gets its own t=0 segmentation.
+Initial loss inherits the solution loss unless explicitly configured separately.
+D uses log(D/D_min)/log(D_max/D_min) and a sigmoid scalar head in that coordinate;
+known D bypasses the head and enters typed context. Unknown D values are removed
+before context encoding. Other physical quantities/types need declared schemas;
+a generic field encoder does not establish an operational PDE specialist.
+
+Coordinates use periodic Fourier spatial features and explicit continuous physical
+tau, independent of s. Local selection uses stable nearest periodic anchors and
+is piecewise differentiable away from selection boundaries. Math attention uses
+FP32 score/softmax reductions for actual second derivatives. A generated latent
+is reused across arbitrary supported physical-time queries; it is not evolved by
+a mandatory numerical solver. Initial and solution heads are learned jointly,
+not constrained to exact equality or conservation.
+
+Optional decoded auxiliary training uses z_s+(1-s)v, not an exact ODE endpoint.
+The decoder/normalization stay frozen. Observation likelihood, exact samples,
+normalized heat residual, s cutoff and explicit beta weights are documented in
+joint-latent-model.md. Bounded latent correction changes distributions; no exact
+posterior guarantee is asserted. Euler NFE=steps; Heun NFE=2*steps.
+
+## Operator-aware heat/wave v2
+
+The active generated state contains initial physical quantities, not a trajectory.
+Heat q=u obeys u_t=DΔu; wave q=(u,v) obeys u_t=v, v_t=c²Δu. A1 learns spatial
+state/input representations. A2 learns E(z,t_a,t_b)=z+(t_b-t_a)F(z,t_a,t_b,graph,
+physical context), with zero coefficient increment and absent-state masks. B fits
+straight conditional flow matching to frozen initial-state/scalar targets. Physical
+time t and Gaussian-generation flow time s are independent. Spatial region weights
+only affect decoded physical supervision, never latent-token velocity losses.
+
+Physical derivatives use the chain rule through E and the spatial decoder. Periodic
+all-anchor smooth cosine kernels avoid hard routing boundaries. Strong smooth wave
+residuals are u_t-v and v_t-c²Δu. Exact reference mean(v) is constant, mean(u) is
+mean(u0)+t mean(v0), and E_wave=1/2∫[v²+c²|∇u|²]dx is conserved. Learned values are
+measured with grid-dependent quadrature, not assumed. Heat L2 energy decay is not
+applied to wave. Stable Fourier zero/Nyquist conventions, quantity-specific training
+normalization, per-stage losses and metric reductions are derived/recorded in
+operator-wave-model.md. The extension PDF is design guidance, not a proof of our
+learned operator, posterior, numerical conservation or generalization.
+
+### Resolved training-family contract
+
+The training selector chooses enabled PDE families, independently of a displayed
+reference. Positive family_weights normalize to sampling probabilities; state schemas
+are heat:[u], wave:[u,v]. Initial-field shape-mixture labels are not PDE families.
+The same family sampler feeds A1/A2/B. The selected reconstruction objective and alpha
+apply to decoded normalized physical quantities in A1 and A2, before active-quantity
+averaging. A2 additionally retains0.1 latent alignment and0.01 latent/decoded composition
+weights by default; B's masked equal-group CFM velocity loss is unchanged. The routing
+audit's controlled alpha0/.5 check changes real encoder/decoder optimizer updates.

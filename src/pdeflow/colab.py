@@ -11,20 +11,22 @@ from pdeflow.coordinate.optimization import options,precision,scientific_source,
 
 def preset(name='large',device='cuda',precision_policy='auto',overrides=None):
     c=CoordinateConfig(dimension=2,reference_shape=(64,64),times=(0.,.05,.1,.15),width=512,tokens=128,layers=8,heads=8,
-       train_count=65536,validation_count=2048,test_count=2048,ae_steps=100000,flow_steps=100000,encoder_points=1024,query_points=512,
+       train_count=65536,validation_count=2048,test_count=2048,ae_steps=100000,evolution_steps=100000,flow_steps=100000,encoder_points=1024,query_points=512,
        batch_size=8,learning_rate=.0003,checkpoint_every=500,observation_counts=(1,128),unconditional_probability=0.,data_mode='procedural',temporal_mode='continuous',time_interval=(0.,1.),
        distribution={'max_wave':4,'amplitude':[.4,1.2],'background':[-.5,.5],'width':[.08,.18]},
        runtime={'device':device,'dtype':'float32','threads':2},training_options={'precision':precision_policy,'calibration_count':512,
            'validation_every':500,'validation_subset':12,'broad_every':5000,'broad_subset':48,'observation_locations':'scattered',
            'autoencoder':{'warmup':1000,'schedule':'cosine'},'flow':{'warmup':1000,'schedule':'cosine'}})
-    if name=='pipeline-check':c=replace(c,reference_shape=(8,8),width=16,tokens=4,layers=1,heads=2,train_count=12,validation_count=6,test_count=6,
-          ae_steps=2,flow_steps=2,encoder_points=32,query_points=32,batch_size=2,checkpoint_every=1,observation_counts=(1,8),
+    if name in ('pipeline-check','smoke'):
+        c=replace(c,reference_shape=(8,8),train_count=12,validation_count=12,test_count=12,
+          ae_steps=2,evolution_steps=2,flow_steps=2,encoder_points=32,query_points=32,batch_size=2,checkpoint_every=1,observation_counts=(1,8),
           distribution={'max_wave':1,'width':[.4,.5]},training_options={'precision':precision_policy,'calibration_count':6,'validation_every':1,'validation_subset':2,'broad_every':20,'broad_subset':6,'observation_locations':'scattered'})
-    elif name=='medium':c=replace(c,reference_shape=(32,32),width=128,tokens=32,layers=4,heads=8,train_count=8192,validation_count=256,test_count=256,
-          ae_steps=10000,flow_steps=10000,encoder_points=512,query_points=256,observation_counts=(1,64),distribution={'max_wave':4,'width':[.1,.2]})
-    elif name=='extra-large':c=replace(c,width=768,tokens=192,layers=12,heads=12,train_count=131072,validation_count=4096,test_count=4096,
-          ae_steps=200000,flow_steps=200000,encoder_points=2048,query_points=1024,training_options={**c.training_options,'microbatch':4,'accumulation':2,'activation_checkpointing':True})
-    elif name not in ('large','custom'):raise ValueError('Preset: pipeline-check, medium, large, extra-large or custom')
+    elif name in ('xsmall','small','medium'):
+        c=replace(c,reference_shape=(32,32),train_count=8192,validation_count=256,test_count=256,ae_steps=10000,evolution_steps=10000,flow_steps=10000,encoder_points=512,query_points=256,observation_counts=(1,64),distribution={**c.distribution,'width':[.1,.2]})
+    elif name in ('extra-large','xlarge'):
+        c=replace(c,train_count=131072,validation_count=4096,test_count=4096,ae_steps=200000,evolution_steps=200000,flow_steps=200000,encoder_points=2048,query_points=1024,training_options={**c.training_options,'microbatch':4,'accumulation':2,'activation_checkpointing':True})
+    from pdeflow.coordinate.presets import capacity
+    c=capacity(c,name)
     raw=c.to_dict()
     for k,v in (overrides or {}).items():
         if k not in raw:raise ValueError('Unknown configuration override: '+k)
@@ -58,7 +60,7 @@ def guard(c,allow_cpu_check=False):
     report=hardware(c.runtime['device'])
     if c.runtime['device']=='cuda' and not torch.cuda.is_available():raise ValueError('No CUDA GPU. Select Runtime → Change runtime type → GPU, or explicitly select CPU with the pipeline-check preset.')
     device,_=RuntimeSpec(**c.runtime).resolve()
-    small=c.width<=32 and c.train_count<=64 and max(c.ae_steps,c.flow_steps)<=20
+    small=c.width<=32 and c.train_count<=64 and max(c.ae_steps,c.evolution_steps,c.flow_steps)<=20
     if c.data_mode=='materialized' and np.prod(c.reference_shape)*len(c.times)*4*(c.train_count+c.validation_count+c.test_count)>512*1024**2:
         raise ValueError('This substantial Colab run must use procedural data; materialized legacy data would exceed the bounded host-memory policy')
     if device.type!='cuda' and not (allow_cpu_check and small):raise ValueError('Substantial Colab runs require CUDA. Choose Runtime → Change runtime type → GPU. CPU is only allowed explicitly for a small pipeline check.')
@@ -67,18 +69,16 @@ def guard(c,allow_cpu_check=False):
 
 
 def summary(c):
-    from pdeflow.coordinate.model import Autoencoder,Velocity
-    with torch.device('meta'):
-        ae=Autoencoder(c);flow=Velocity(c)
-    counts={'representation':sum(p.numel() for p in ae.parameters()),'flow':sum(p.numel() for p in flow.parameters())}
+    from pdeflow.coordinate.presets import counts as parameter_counts
+    counts=parameter_counts(c)
     o=options(c);nodes=int(np.prod(c.reference_shape));bytes_example=nodes*(c.animation_frames if c.temporal_mode=='continuous' else len(c.times))*4
-    return {'architecture':'Set encoder / frozen latent representation / conditional latent transformer / coordinate decoder','parameters':counts,
+    return {'architecture':'Operator-Aware Physical Latent v2','parameters':counts,
       'field_reconstruction_loss':__import__('dataclasses').asdict(__import__('pdeflow.field_losses',fromlist=['settings']).settings(c.field_loss)),
       'supervision_query_cost':{'domain_queries':c.query_points,'additional_region_queries':__import__('pdeflow.field_losses',fromlist=['settings']).settings(c.field_loss).region_queries if __import__('pdeflow.field_losses',fromlist=['settings']).settings(c.field_loss).type=='region_balanced_mse' else 0},
       'config':c.to_dict(),'training_examples':c.train_count,'validation_examples':c.validation_count,'untouched_test_examples':c.test_count,
       'reference_shape':list(c.reference_shape),'temporal_mode':c.temporal_mode,'time_interval':list(c.interval),'animation_frames':c.animation_frames,'legacy_snapshot_times':list(c.times) if c.temporal_mode!='continuous' else None,'effective_batch':c.batch_size,'microbatch':o['microbatch'],'accumulation':o['accumulation'],
-      'updates':{'representation':c.ae_steps,'flow':c.flow_steps},'hypothetical_materialized_float32_bytes':bytes_example*(c.train_count+c.validation_count+c.test_count),
-      'bounded_reference_cache_bytes':8*(nodes*52+c.encoder_points*16) if c.temporal_mode=='continuous' else bytes_example*8,'cache_estimate_definition':'Eight initial grids, Fourier coefficients/waves and fixed encoder sets; current batches/temporary Fourier chunks additional' if c.temporal_mode=='continuous' else 'Eight full legacy examples','estimated_weight_bytes':4*sum(counts.values()),'rough_adam_weights_moments_bytes':12*sum(counts.values()),
+      'updates':{'representation':c.ae_steps,'evolution':c.evolution_steps,'flow':c.flow_steps},'hypothetical_materialized_float32_bytes':bytes_example*(c.train_count+c.validation_count+c.test_count),
+      'bounded_reference_cache_bytes':8*(nodes*52+c.encoder_points*16) if c.temporal_mode=='continuous' else bytes_example*8,'cache_estimate_definition':'Eight initial grids, Fourier coefficients/waves and fixed encoder sets; current batches/temporary Fourier chunks additional' if c.temporal_mode=='continuous' else 'Eight full legacy examples','maximum_latent_cache_bytes':4*(c.train_count+c.validation_count)*c.tokens*c.width,'estimated_weight_bytes':4*counts['total_training'],'rough_adam_weights_moments_bytes':12*counts['total_training'],
       'estimates':'Parameter/storage arithmetic only; activations, attention, AMP workspaces and allocator overhead need actual profiling. No fit or speed guarantee.'}
 
 
@@ -86,11 +86,11 @@ def gallery(c,output):
     import matplotlib;matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from pdeflow.coordinate.dataset import example,recipe
-    n=min(len(recipe(c)['families']),c.train_count);fig,axes=plt.subplots(2,n,figsize=(2.5*n,5),squeeze=False)
+    n=min(12,c.train_count);fig,axes=plt.subplots(2,n,figsize=(2.5*n,5),squeeze=False)
     records=[]
     for i in range(n):
-        a=example(c,'train',i,dtype=np.float64);u=(np.stack([a['solver'].frame(t,a['D'],c.interval) for t in c.interval]) if c.temporal_mode=='continuous' else a['values'].reshape(len(c.times),*c.reference_shape));f=example(c,'train',i,tuple(2*x for x in c.reference_shape),dtype=np.float64);fine=np.stack([f['solver'].frame(t,f['D'],c.interval) for t in c.interval]) if c.temporal_mode=='continuous' else f['values'].reshape(len(c.times),*[2*x for x in c.reference_shape])
-        error=float(np.sqrt(np.mean((u-fine[:,::2,::2])**2)));records.append({'family':a['family'],'id':a['id'],'D':a['D'],'native_vs_2x_reference_rmse':error})
+        a=example(c,'train',i,dtype=np.float64);u=(np.stack([a['solver'].frame(t,a['D'],c.interval) for t in c.interval]) if c.temporal_mode=='continuous' else a['values'].reshape(len(c.times),*c.reference_shape));fine=np.stack([a['solver'].frame(t,a['parameter'],c.interval,tuple(2*x for x in c.reference_shape)) for t in c.interval])
+        error=float(np.sqrt(np.mean((u-fine[:,::2,::2])**2)));records.append({'family':a['family'],'id':a['id'],'parameter':a['parameter'],'case':a['case'],'native_vs_2x_reference_rmse':error})
         lo,hi=float(u.min()),float(u.max())
         for j,t in enumerate((0,-1)):axes[j,i].imshow(u[t].T,origin='lower',vmin=lo,vmax=hi,cmap='viridis');axes[j,i].set_title(f'{a["family"]}\nt={(c.interval if c.temporal_mode=='continuous' else c.times)[t]:g}');axes[j,i].axis('off')
     fig.tight_layout();Path(output).parent.mkdir(parents=True,exist_ok=True);fig.savefig(output);plt.close(fig)
@@ -104,15 +104,15 @@ def profile(c,local_root,allow_cpu_check=False,updates=3):
     dev,_=RuntimeSpec(**c.runtime).resolve();devices=list(range(torch.cuda.device_count())) if dev.type=='cuda' else []
     try:
         with torch.random.fork_rng(devices=devices),tempfile.TemporaryDirectory(prefix='pdeflow-profile-',dir=local_root) as temporary:
-            p=Path(temporary);pc=replace(c,ae_steps=updates,flow_steps=max(2,updates),checkpoint_every=updates,
-              training_options={**c.training_options,'calibration_count':min(8,c.train_count),'validation_every':updates,'validation_subset':min(2,c.validation_count),'broad_every':999999})
+            p=Path(temporary);pc=replace(c,ae_steps=updates,evolution_steps=updates,flow_steps=max(2,updates),checkpoint_every=updates,
+              training_options={**c.training_options,'calibration_count':min(8,c.train_count),'validation_every':updates,'validation_subset':min(2,c.validation_count),'broad_every':999999,'profile_components':True})
             records={}
-            for stage in ('autoencoder','flow'):
+            for stage in ('autoencoder','evolution','flow'):
                 stage_root=p/stage
-                r=train(pc.to_dict(),stage_root,stage,p/'autoencoder/autoencoder.pt' if stage=='flow' else None)
+                r=train(pc.to_dict(),stage_root,stage,p/'evolution/evolution.pt' if stage=='flow' else p/'autoencoder/autoencoder.pt' if stage=='evolution' else None)
                 rows=read_json(stage_root/'history.json');measured=rows[1:] or rows;seconds=float(np.median([v['step_seconds'] for v in measured]));records[stage]={'step_seconds':seconds,
-                    'data_seconds':float(np.mean([v['data_seconds'] for v in rows])),'validation_seconds':sum(v.get('validation_seconds',0) for v in rows),'memory':r['memory'],'checkpoint_bytes':r['checkpoint_bytes'],
-                    'rough_training_seconds':seconds*(c.ae_steps if stage=='autoencoder' else c.flow_steps),'cost_scope':'Warmup first optimizer step excluded from median; validation/checkpoint/sync costs reported separately, not in duration estimate'}
+                    'data_seconds':float(np.mean([v['data_seconds'] for v in rows])),'validation_seconds':sum(v.get('validation_seconds',0) for v in rows),'component_timings_after_warmup':[v.get('component_timings') for v in measured],'memory':r.get('memory',{'note':'Device peak allocation unavailable for this backend'}),'checkpoint_bytes':sum(f.stat().st_size for f in stage_root.glob('*.pt')),
+                    'rough_training_seconds':seconds*(getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[stage])),'cost_scope':'Warmup first optimizer step excluded from median; validation/checkpoint/sync costs reported separately, not in duration estimate'}
             t=time.perf_counter();representation(p/'autoencoder/autoencoder.pt',p/'representation-validation.json',c.runtime['device'],subset=min(2,c.validation_count));report['physical_validation_seconds']=time.perf_counter()-t
             t=time.perf_counter();validate_flow(p/'flow/coordinate.pt',p/'flow-validation.json',c.runtime['device'],subset=1,counts=[max(1,c.observation_counts[0])],noises=[0.],particles=1,steps=2,resolution=16)
             report['flow_reconstruction_validation_seconds']=time.perf_counter()-t
@@ -146,8 +146,8 @@ class Session:
     def sync(self,force=False):
         from .persistence import publish
         if force or time.time()-self.last_sync>=self.sync_seconds:
-            self.snapshot=publish(self.root,self.persistent,keep=self.keep_snapshots);self.last_sync=time.time()
-            write_json(self.root/'sync-status.json',{'last_success_unix':self.last_sync,'snapshot':self.snapshot['id'],'bytes':self.snapshot['unique_bytes']})
+            started=time.perf_counter();self.snapshot=publish(self.root,self.persistent,keep=self.keep_snapshots);self.last_sync=time.time()
+            write_json(self.root/'sync-status.json',{'last_success_unix':self.last_sync,'snapshot':self.snapshot['id'],'bytes':self.snapshot['unique_bytes'],'sync_seconds':time.perf_counter()-started})
         return self.snapshot
     def restore(self):
         from .persistence import restore
@@ -166,13 +166,13 @@ class Session:
             if self.c.field_loss!=recorded:
                 raise ValueError('Field reconstruction loss/settings differ from the recorded run; use its recorded configuration or start a new run. No automatic objective migration.')
         guard(self.c,self.allow_cpu_check)
-        if mode not in ('new','resume','extend') or stages not in ('both','representation','flow'):raise ValueError('Choose supported stage and resume mode')
+        if mode not in ('new','resume','extend') or stages not in ('both','representation','evolution','flow'):raise ValueError('Choose supported stage and resume mode')
         if not np.isfinite(gate_ratio) or not 0<gate_ratio<=1:raise ValueError('Gate ratio must be in (0,1]')
         manifest=self.root/'session.json'
         if mode=='new' and manifest.exists():raise FileExistsError('Run already exists; choose resume/extend or another name')
         if mode!='new' and not manifest.exists():self.restore()
         if mode!='new':(self.root/'stop-request.json').unlink(missing_ok=True)
-        if max(self.c.ae_steps,self.c.flow_steps)>20:
+        if max(self.c.ae_steps,self.c.evolution_steps,self.c.flow_steps)>20:
             if not (self.root/'profile.json').exists():raise ValueError('Run the real preflight profile first')
             prof=read_json(self.root/'profile.json')
             stable=lambda g:{k:g[k] for k in ('name','total_bytes','capability','bf16')} if g else None
@@ -201,7 +201,7 @@ class Session:
         try:
             result=coordinate_stages(self.c.to_dict(),self.root,stages,mode,dependency,gate_ratio,override_gate,stop_after,event)
             record.update(result,state=result['state']);write_json(manifest,record)
-            if result['state']=='completed' and stages!='representation':self.export(persist=False)
+            if result['state']=='completed' and stages not in ('representation','evolution'):self.export(persist=False)
             return record
         except BaseException as error:
             record.update(state='interrupted' if isinstance(error,KeyboardInterrupt) else 'failed',error=str(error));write_json(manifest,record);raise
@@ -215,12 +215,13 @@ class Session:
         if not path.exists():raise ValueError('No valid conditional-flow state to export yet')
         cp,c=read_checkpoint(path,'flow')
         if cp['progress']<1:raise ValueError('At least one completed optimizer update is required')
-        exported={k:v for k,v in cp.items() if k not in ('optimizer','scheduler','scaler','rng','torch_rng','cuda_rng')};exported['inference_ready']=True
+        from .coordinate.training import portable_checkpoint
+        exported=portable_checkpoint(cp);exported['inference_ready']=True
         exported['training_status']='completed budget' if cp['completed'] else 'partial training; latest saved optimizer boundary'
         destination=self.root/'export/coordinate.pt';atomic_write(destination,lambda f:torch.save(exported,f))
         report={'checkpoint':'coordinate.pt','sha256':file_digest(destination),'config':c.to_dict(),'completed_updates':cp['progress'],'training_status':exported['training_status'],
               'capabilities':cp['capabilities'],'normalization':cp['normalization'],'scientific_source':cp['scientific_source'],'environment':cp['environment'],
-              'validation':read_json(self.root/'flow-validation.json') if (self.root/'flow-validation.json').exists() else None,'portable':'Includes frozen representation, flow and latent/physical transforms; optimizer/data/external AE not required'}
+              'validation':read_json(self.root/'flow-validation.json') if (self.root/'flow-validation.json').exists() else None,'portable':'Includes decoder, flow, conditioning and latent/physical transforms; no training encoder, optimizer, data or external AE required'}
         write_json(destination.with_suffix('.json'),report)
         if persist:self.sync(True)
         return destination

@@ -8,8 +8,8 @@ from pdeflow.local import workspace_root
 
 class TrainingRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
-    problem: str = 'heat-2d'
-    model: str = 'fixed-grid'
+    problem: str = 'heat-wave-2d'
+    model: str = 'resolution-flexible'
     budget: str = 'pipeline-check'
     device: str = 'auto'
     advanced: dict = Field(default_factory=dict)
@@ -54,33 +54,28 @@ def register(app, workspace):
     @app.post('/api/training/loss-preview')
     def loss_preview(payload: TrainingRequest):
         plan=workflow.plan(payload.model_dump())
-        if plan['model']!='resolution-flexible' or plan['problem']!='heat-2d':raise ValueError('Field-loss preview requires the heat2D representation')
+        if plan['model']!='resolution-flexible':raise ValueError('Field-loss preview requires the shared physical-state representation')
         from pdeflow.coordinate.contracts import CoordinateConfig
-        from pdeflow.coordinate.dataset import example
+        from pdeflow.coordinate.dataset import example,state_samples,identity
         from pdeflow.field_losses import analyze,settings
-        c=CoordinateConfig(**plan['config']).validate();cfg=settings(c.field_loss);result=[]
-        if c.data_mode!='procedural':raise ValueError('Live loss preview requires the procedural training distribution; saved materialized runs retain their original data')
-        from pdeflow.coordinate.optimization import options
-        from pdeflow.coordinate.dataset import identity
         from dataclasses import replace
         import numpy as np
-        count=min(c.train_count,options(c)['calibration_count']);key=identity(c)
-        if count>512:raise ValueError('Live preview is bounded to512 calibration solutions; inspect saved training calibration for a larger budget')
+        c=CoordinateConfig(**plan['config']).validate();cfg=settings(c.field_loss);key=identity(c);result=[]
         if key not in preview_scales:
-            # Encoder sample count changes no physical realization or dataset identity.
-            pc=replace(c,encoder_points=8);total=total2=points=0
-            for i in range(count):
-                u=example(pc,'train',i)['values'].astype(np.float64);total+=u.sum();total2+=(u*u).sum();points+=u.size
-            mean=total/points;preview_scales[key]=max(float(np.sqrt(max(0,total2/points-mean*mean))),1e-6)
+            pc=replace(c,encoder_points=min(32,c.encoder_points));samples={f:[[],[]] for f in c.family_weights}
+            for i in range(min(12,c.train_count)):
+                item=example(pc,'train',i)
+                for t in (0.,.137,.4,.8):
+                    values=state_samples(item,item['context'],t,pc).numpy()
+                    for j in range(1+int(item['family']=='wave')):samples[item['family']][j].append(values[:,j])
+            preview_scales[key]={f:[max(float(np.concatenate(a).std()),1e-3) if a else 1. for a in arrays] for f,arrays in samples.items()}
             if len(preview_scales)>16:preview_scales.pop(next(iter(preview_scales)))
-        scale=preview_scales[key]
-        for i in range(min(6,c.train_count)):
+        for i in range(min(12,c.train_count)):
             item=example(c,'train',i)
-            u=item['solver'].frame(0.,item['D'],c.interval,shape=(cfg.analysis_resolution,)*2) if 'solver' in item else item['values'].reshape(len(c.times),*c.reference_shape)[0]
-            a=analyze(u,c.lengths,c.field_loss,scale)
-            effective=a['contribution_weights'] if cfg.type=='region_balanced_mse' else a['contrast_weights']/a['contrast_weights'].mean() if cfg.type=='weighted_mse' else np.ones_like(a['reference'])
-            result.append({'id':item['id'],'family':item['family'],'reference':a['reference'].tolist(),'labels':a['labels'].tolist(),'weights':effective.tolist(),'regions':a['regions'],'region_count':a['region_count'],'training_calibration_scale':scale})
-        return {'examples':result,'settings':__import__('dataclasses').asdict(cfg),'split':'train','meaning':'Actual training distribution at t=0; exact frozen training-calibration scale from the same physical realizations/recipe. Never test examples.'}
+            for j,quantity in enumerate(('u','v')[:1+int(item['family']=='wave')]):
+                scale=preview_scales[key][item['family']][j];u=item['solver'].frame(0.,item['parameter'],c.interval,(cfg.analysis_resolution,)*2,quantity);a=analyze(u,c.lengths,c.field_loss,scale);effective=a['contribution_weights'] if cfg.type=='region_balanced_mse' else a['contrast_weights']/a['contrast_weights'].mean() if cfg.type=='weighted_mse' else np.ones_like(a['reference'])
+                result.append({'id':item['id'],'family':item['family']+' '+item['case']+' '+quantity,'quantity':quantity,'reference':a['reference'].tolist(),'labels':a['labels'].tolist(),'weights':effective.tolist(),'regions':a['regions'],'region_count':a['region_count'],'training_calibration_scale':scale})
+        return {'examples':result,'settings':__import__('dataclasses').asdict(cfg),'split':'train','meaning':'Actual training realizations at t=0, separate signed u/v masks. Preview-only scale estimate uses up to12 training realizations and32 spatial samples at four calibration times; exact run normalization is fitted and recorded by the trainer. No test examples.'}
 
     @app.post('/api/training/start', status_code=202)
     def start(payload: StartRequest):

@@ -14,7 +14,7 @@ from pdeflow.field_losses import settings
 
 
 def tiny(kind='region_balanced_mse',device='cpu'):
-    return replace(training_preset('pipeline-check',device,'fp32'),width=8,tokens=2,heads=2,encoder_points=16,query_points=32,
+    return replace(training_preset('pipeline-check',device,'fp32'),width=8,tokens=8,heads=2,encoder_points=16,query_points=32,
        runtime={'device':device,'threads':1},field_loss={'type':kind,'analysis_resolution':8,'time_groups':2,'region_queries':32})
 
 
@@ -25,16 +25,15 @@ def test_actual_encoder_decoder_updates_and_loss_provenance(tmp_path,kind):
     record=train(c.to_dict(),root,'autoencoder')
     cp,_=read_checkpoint(root/'autoencoder.pt')
     assert cp['progress']==2 and cp['field_loss']['type']==kind
-    assert not torch.equal(initial['encoder.in_proj_weight'],cp['autoencoder']['encoder.in_proj_weight'])
-    assert not torch.equal(initial['decoder.in_proj_weight'],cp['autoencoder']['decoder.in_proj_weight'])
-    assert not torch.equal(initial['reference.0.weight'],cp['autoencoder']['reference.0.weight'])
+    assert not torch.equal(initial['encoder.aggregate.q.weight'],cp['autoencoder']['encoder.aggregate.q.weight'])
+    assert not torch.equal(initial['decoder.global_attention.q.weight'],cp['autoencoder']['decoder.global_attention.q.weight'])
+    assert not torch.equal(initial['encoder.fields.0.0.weight'],cp['autoencoder']['encoder.fields.0.0.weight'])
     assert all(r['gradient_norm']>0 for r in cp['history'])
     assert record['config']['field_loss']['type']==kind
     report=representation(root/'autoencoder.pt',root/'validation.json',subset=2)
-    assert report['field_metrics']['mse']>=0
-    assert report['field_metrics']['rmse']**2==pytest.approx(report['field_metrics']['mse'])
-    assert report['records'][0]['training_weighted_objective_normalized']>=0
-    assert all('background_mse' in r for r in report['records'][0]['field_metrics']['per_time'])
+    q=report['records'][0]['quantities']['u'];assert q['field_metrics']['uniform_physical']['mse']>=0
+    assert q['field_metrics']['uniform_physical']['rmse']**2==pytest.approx(q['field_metrics']['uniform_physical']['mse'])
+    assert all('background_mse' in r for r in q['field_metrics']['per_time'])
 
 
 def test_resume_same_objective_exact_and_change_rejected(tmp_path):
@@ -57,8 +56,8 @@ def test_shared_colab_path_defaults_preserved_legacy_and_frozen_flow(tmp_path):
     result=session.run(override_gate=True);assert result['state']=='completed'
     cp,_=read_checkpoint(session.root/'flow/coordinate.pt')
     assert cp['field_loss']['type']=='region_balanced_mse'
-    assert cp['latent_flow_loss']=='unchanged mean squared CFM velocity error'
-    assert cp['autoencoder'] and cp['velocity']
+    assert cp['capabilities']['families']==['heat','wave']
+    assert cp['inference_state'] and cp['velocity'] and cp['autoencoder'] is None
     exported=session.export();assert exported.is_file()
     wrong=Session(replace(c,field_loss={'type':'mae'}),'check',tmp_path/'local',tmp_path/'persistent',allow_cpu_check=True)
     with pytest.raises(ValueError,match='recorded run'):wrong.run(mode='resume')
@@ -78,7 +77,7 @@ def test_alpha_changes_real_encoder_and_decoder_optimizer_updates(tmp_path):
         train(config.to_dict(),tmp_path/str(alpha),'autoencoder')
         states.append(read_checkpoint(tmp_path/str(alpha)/'autoencoder.pt')[0])
     assert states[0]['dataset_identity']==states[1]['dataset_identity']
-    for key in ('encoder.in_proj_weight','decoder.in_proj_weight'):
+    for key in ('encoder.aggregate.q.weight','decoder.global_attention.q.weight'):
         assert not torch.allclose(states[0]['autoencoder'][key],states[1]['autoencoder'][key],atol=1e-7,rtol=0),key
 
 

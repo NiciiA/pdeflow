@@ -152,7 +152,7 @@ class AnalysisCache:
         self.values.move_to_end(key);return self.values[key]
 
 
-def grouped_queries(c,items,g,normalization,cache):
+def grouped_queries(c,items,g,normalization,cache,physical_times=None):
     """Uniform-domain + region-stratified queries; each example/time reduced equally.
 
     Region cells are uniform-area periodic Voronoi cells around analysis nodes.
@@ -161,7 +161,7 @@ def grouped_queries(c,items,g,normalization,cache):
     """
     from pdeflow.heat_continuous import FourierHeat
     from pdeflow.coordinate.temporal import sample_times
-    cfg=settings(c.field_loss);groups=cfg.time_groups if c.temporal_mode=='continuous' else len(c.times)
+    cfg=settings(c.field_loss);groups=len(physical_times) if physical_times is not None else cfg.time_groups if c.temporal_mode=='continuous' else len(c.times)
     if c.query_points<groups:raise ValueError('Domain queries must cover every supervised physical time group')
     extra=cfg.region_queries if cfg.type=='region_balanced_mse' else 0
     queries=[];targets=[];all_weights=[];stats=[]
@@ -170,7 +170,7 @@ def grouped_queries(c,items,g,normalization,cache):
         g=torch.Generator().manual_seed(seed+b*100003)
         region_rng=torch.Generator().manual_seed(seed+b*100003+731)
         solver=item.get('solver') or FourierHeat(np.asarray(item['values']).reshape(len(c.times),*c.reference_shape)[0],c.lengths,c.origins)
-        times=sample_times(c,groups,g,'query').numpy() if c.temporal_mode=='continuous' else np.asarray(c.times)
+        times=np.asarray(physical_times) if physical_times is not None else sample_times(c,groups,g,'query').numpy() if c.temporal_mode=='continuous' else np.asarray(c.times)
         analyses=[cache.get((item['id'],float(t),str(asdict(cfg)),normalization['scale']),lambda t=t:analyze(solver.frame(float(t),item['D'],c.interval,shape=(cfg.analysis_resolution,)*2),c.lengths,c.field_loss,normalization['scale'])) for t in times]
         counts=[len(a['regions']) for a in analyses];total=sum(counts)
         if extra and total>extra:raise ValueError(f'{total} retained time-regions exceed region_queries={extra}; increase the explicit fixed region query budget or adjust documented detection settings. No region was dropped.')

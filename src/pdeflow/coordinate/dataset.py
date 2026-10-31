@@ -1,128 +1,108 @@
-"""Bounded deterministic complete heat solutions. Splits precede observations."""
-from functools import lru_cache
+"""Deterministic shared heat/wave realization splits and bounded references."""
 from pathlib import Path
-from dataclasses import replace
+from functools import lru_cache
 import time
 import numpy as np
 import torch
-from pdeflow.core import GridSpec,DomainSpec
-from pdeflow.numerics import heat_reference
-from pdeflow.runtime import digest,write_json,read_json,file_digest
+from pdeflow.runtime import digest,read_json,write_json
+from pdeflow.numerics.dynamic import SpectralState
 
 FAMILIES=('cosine','fourier_sum','smooth_random','hot_spot','multiple_spots','brush')
-
+WAVE_CASES=('standing','travelling','pulse','velocity_pulse','signed_pulses','random')
 
 def recipe(c):
-    from .optimization import options
-    d={'families':{f:1. for f in FAMILIES},'max_wave':max(1,min(c.reference_shape)//8),'amplitude':[.4,1.2],
-       'background':[-.5,.5],'width':[max(.08,3/min(c.reference_shape)),max(.18,4/min(c.reference_shape))]}
+    d={'families':{f:1. for f in FAMILIES},'max_wave':max(1,min(c.reference_shape)//8),'amplitude':[.4,1.2],'background':[-.5,.5],'width':[max(.08,3/min(c.reference_shape)),max(.18,4/min(c.reference_shape))]}
     if set(c.distribution)-d.keys():raise ValueError('Unknown distribution setting')
     d.update(c.distribution)
-    d['families']=dict(sorted(d['families'].items())) # JSON/key order must never change a realization
-    if c.dimension!=2:raise ValueError('Procedural mixture currently supports heat2D; legacy materialized training retains 1D–3D')
-    if not d['families'] or set(d['families'])-set(FAMILIES) or any(not np.isfinite(w) or w<=0 for w in d['families'].values()):raise ValueError('Choose positive weights for supported initial-field families')
-    if min(c.train_count,c.validation_count,c.test_count)<len(d['families']):raise ValueError('Each fixed split must contain at least one solution per enabled initial-field family')
-    if type(d['max_wave'])!=int or not 1<=d['max_wave']<=min(c.reference_shape)//8:raise ValueError('Max wave needs at least eight reference nodes per wavelength')
-    for key in ('amplitude','background','width'):
-        if len(d[key])!=2 or not np.isfinite(d[key]).all() or d[key][1]<d[key][0]:raise ValueError('Invalid distribution range: '+key)
-    if d['amplitude'][0]<=0 or d['width'][0]<3/min(c.reference_shape) or d['width'][1]>1:raise ValueError('Spot/brush widths must span at least three grid cells and be <= domain length')
-    temporal=({'temporal_mode':'continuous','time_interval':list(c.interval),'time_sampling':__import__('pdeflow.coordinate.temporal',fromlist=['policies']).policies(c),'observation_placement':c.observation_placement or {'random':.5,'even':.25,'heat':.25}} if c.temporal_mode=='continuous' else {'times':list(c.times)})
-    return {**temporal,'version':2 if c.temporal_mode=='continuous' else 1,'seed':c.seed,'shape':list(c.reference_shape),'lengths':list(c.lengths),'origins':list(c.origins),
-            'diffusivity_range':list(c.diffusivity_range),'counts':[c.train_count,c.validation_count,c.test_count],
-            'normalization_calibration_count':min(c.train_count,options(c)['calibration_count']),**d}
-
+    if not d['families'] or set(d['families'])-set(FAMILIES) or any(not np.isfinite(v) or v<=0 for v in d['families'].values()):raise ValueError('Positive supported heat feature-family weights required')
+    if min(c.train_count,c.validation_count,c.test_count)<6*len(c.family_weights):raise ValueError('Every split needs six independent realizations per enabled PDE family')
+    if not 1<=d['max_wave']<min(c.reference_shape)/2 or d['width'][0]<3/min(c.reference_shape):raise ValueError('Generated spatial frequencies/features must be resolved by the reference grid')
+    return {**d,'family_weights':c.family_weights,'wave_cases':WAVE_CASES,'wave_speed_range':c.wave_speed_range,'diffusivity_range':c.diffusivity_range,
+            'counts':[c.train_count,c.validation_count,c.test_count],'seed':c.seed,'reference_shape':c.reference_shape,'domain':[c.lengths,c.origins],'time':c.interval,
+            'encoder_points':c.encoder_points,'wave_phase_strata':32,'near_constant_policy':'Every seventeenth realization after the twelve-case coverage prefix; independent means plus1e-6 smooth contrast','version':'physical_state_mixture_v2'}
 
 def identity(c):return digest(recipe(c))
 
+def initial_pair(c,case,seed,shape=None):
+    rng=np.random.default_rng(seed);shape=tuple(shape or c.reference_shape);x,y=np.meshgrid(np.arange(shape[0])/shape[0],np.arange(shape[1])/shape[1],indexing='ij');r=recipe(c);k=r['max_wave']
+    def random_field():
+        a=np.full(shape,rng.uniform(*r['background']))
+        for j in range(1,k+1):
+            for l in range(0,k+1):a+=rng.normal()*rng.uniform(*r['amplitude'])/(k+1)*np.cos(2*np.pi*(j*x+l*y)+rng.uniform(-np.pi,np.pi))
+        return a
+    def pulse(cx,cy,width):return np.exp(-(np.sin(np.pi*(x-cx))**2+np.sin(np.pi*(y-cy))**2)/(np.pi*width)**2)
+    amplitude=rng.uniform(*r['amplitude']);phase=rng.uniform(-np.pi,np.pi);kx=int(rng.integers(1,k+1));ky=int(rng.integers(0,k+1));theta=2*np.pi*(kx*x+ky*y)+phase
+    u=random_field();v=random_field()
+    if case in ('cosine','standing','travelling'):u=rng.uniform(*r['background'])+amplitude*np.cos(theta);v=np.zeros(shape)
+    elif case in ('hot_spot','pulse','velocity_pulse'):u=amplitude*pulse(*rng.random(2),rng.uniform(*r['width']));v=np.zeros(shape)
+    elif case in ('multiple_spots','signed_pulses','brush'):
+        u=sum(rng.choice([-1.,1.])*amplitude*pulse(*rng.random(2),rng.uniform(*r['width'])) for _ in range(3));v=random_field()
+    # Explicit bandlimit after drawing the smooth generated fields: avoids
+    # unresolved tails and gives a known highest temporal wave frequency.
+    def bandlimit(a):
+        modes=np.meshgrid(*[np.fft.fftfreq(n)*n for n in shape],indexing='ij');keep=(np.abs(modes[0])<=k)&(np.abs(modes[1])<=k)
+        return np.fft.ifftn(np.fft.fftn(a)*keep).real
+    u=bandlimit(u);v=bandlimit(v)
+    if case=='velocity_pulse':v=u.copy();u=np.zeros_like(u)
+    return u,v,{'kx':kx,'ky':ky,'phase':phase,'amplitude':amplitude,'theta':theta}
 
 def example(c,split,index,shape=None,dtype=np.float32):
-    r=recipe(c);split_index={'train':0,'validation':1,'test':2}[split]
-    if not 0<=index<r['counts'][split_index]:raise ValueError('Example index outside fixed split')
-    rng=np.random.default_rng(np.random.SeedSequence([c.seed,split_index,index]))
-    families=list(r['families']);weights=np.asarray(list(r['families'].values()),float);weights/=weights.sum()
-    family=families[index] if index<len(families) else str(rng.choice(families,p=weights))
-    grid=GridSpec(tuple(shape or c.reference_shape),DomainSpec(c.lengths,c.origins),c.times)
-    x,y=np.meshgrid(np.arange(grid.shape[0])/grid.shape[0],np.arange(grid.shape[1])/grid.shape[1],indexing='ij')
-    amplitude=rng.uniform(*r['amplitude']);background=rng.uniform(*r['background']);D=rng.uniform(*c.diffusivity_range)
-    k=r['max_wave'];initial=np.full(grid.shape,background)
-    if family=='cosine':
-        a,b=rng.integers(0,k+1,2)
-        if a==b==0:a=1
-        initial+=amplitude*np.cos(2*np.pi*a*x+rng.uniform(-np.pi,np.pi))*np.cos(2*np.pi*b*y+rng.uniform(-np.pi,np.pi))
-    elif family in ('fourier_sum','smooth_random'):
-        modes=[(a,b) for a in range(-k,k+1) for b in range(-k,k+1) if (a>0 or a==0 and b>0)]
-        if family=='fourier_sum':modes=[modes[j] for j in rng.choice(len(modes),min(6,len(modes)),replace=False)]
-        weights=[np.exp(-(a*a+b*b)/(2*max(1,k/2)**2)) if family=='smooth_random' else 1. for a,b in modes]
-        scale=np.sqrt(sum(w*w for w in weights))
-        for (a,b),w in zip(modes,weights):initial+=amplitude*w/scale*rng.normal()*np.cos(2*np.pi*(a*x+b*y)+rng.uniform(-np.pi,np.pi))
-    else:
-        count=1 if family=='hot_spot' else int(rng.integers(2,5)) if family=='multiple_spots' else int(rng.integers(4,9))
-        centers=rng.random((count,2))
-        if family=='brush':centers=(centers[0]+np.arange(count)[:,None]*rng.uniform(-.08,.08,(1,2)))%1
-        for center in centers:
-            width=rng.uniform(*r['width']);sign=rng.choice([-1.,1.]);bump=np.exp(-(np.sin(np.pi*(x-center[0]))**2+np.sin(np.pi*(y-center[1]))**2)/(np.pi*width)**2)
-            initial+=sign*amplitude/np.sqrt(count)*bump
-    if c.temporal_mode=='continuous':
-        from pdeflow.heat_continuous import FourierHeat
-        from .temporal import points
-        generator=torch.Generator().manual_seed(int(np.random.SeedSequence([c.seed,split_index,index,319]).generate_state(1)[0]))
-        context=points(c,c.encoder_points,generator,'encoder')
-        solver=FourierHeat(initial,c.lengths,c.origins)
-        return {'values':initial.astype(dtype).ravel(),'D':float(D),'family':family,'id':f'{split}:{index}:{identity(c)[:16]}','seed':[c.seed,split_index,index],
-                'context':context.numpy(),'context_values':solver.evaluate(context.numpy(),D,c.interval).astype(np.float32),'solver':solver}
-    values=heat_reference(initial,D,grid).astype(dtype)
-    return {'values':values.reshape(-1),'D':float(D),'family':family,'id':f'{split}:{index}:{identity(c)[:16]}','seed':[c.seed,split_index,index]}
+    r=recipe(c);s=('train','validation','test').index(split);names=sorted(c.family_weights);rng=np.random.default_rng(np.random.SeedSequence([c.seed,s,index]));weights=np.array([c.family_weights[n] for n in names]);weights=weights/weights.sum()
+    # First six realizations of EACH family guarantee fixed validation coverage.
+    family=names[index%len(names)] if index<6*len(names) else str(rng.choice(names,p=weights));case=(FAMILIES if family=='heat' else WAVE_CASES)[(index//len(names))%6]
+    if family=='heat' and index>=6*len(names):
+        cases=list(r['families']);cw=np.array(list(r['families'].values()));case=str(rng.choice(cases,p=cw/cw.sum()))
+    seed=int(np.random.SeedSequence([c.seed,s,index,271]).generate_state(1)[0]);u,v,meta=initial_pair(c,case,seed,shape)
+    bounds=c.diffusivity_range if family=='heat' else c.wave_speed_range;parameter=float(rng.uniform(*bounds))
+    if case=='travelling':
+        omega=parameter*np.sqrt((2*np.pi*meta['kx']/c.lengths[0])**2+(2*np.pi*meta['ky']/c.lengths[1])**2);v=meta['amplitude']*omega*np.sin(meta['theta'])
+    if index>=12 and index%17==0:
+        u=float(rng.uniform(-.5,.5))+1e-6*(u-u.mean());v=float(rng.uniform(-.2,.2))+1e-6*(v-v.mean());case='approximately_constant'
+    solver=SpectralState(u,v if family=='wave' else None,c.lengths,c.origins,family)
+    if family=='heat':v=np.zeros_like(u)
+    generator=torch.Generator().manual_seed(seed);xy=torch.rand(c.encoder_points,2,generator=generator)*torch.tensor(c.lengths)+torch.tensor(c.origins)
+    return {'values':u.astype(dtype).ravel(),'initial':np.stack([u,v],-1).astype(np.float32),'D':parameter,'parameter':parameter,'family':family,'case':case,'id':f'{split}:{index}:{identity(c)[:16]}','seed':[c.seed,s,index],
+            'context':xy.numpy(),'solver':solver,'metadata':meta}
 
+class QuantityReference:
+    def __init__(self,solver,quantity):self.solver=solver;self.quantity=quantity
+    def frame(self,t,p,interval,shape=None):return self.solver.frame(t,p,interval,shape,self.quantity)
+    def evaluate(self,q,p,interval):return self.solver.evaluate(q,p,interval,self.quantity)
+
+def item_quantity(item,quantity):return {**item,'id':item['id']+':'+quantity,'solver':QuantityReference(item['solver'],quantity)}
+
+def state_samples(item,xy,t,c,norm=None):
+    q=np.c_[np.asarray(xy),np.full(len(xy),float(t))];u=item['solver'].evaluate(q,item['parameter'],c.interval,'u');v=item['solver'].evaluate(q,item['parameter'],c.interval,'v') if item['family']=='wave' else np.zeros(len(q))
+    values=np.stack([u,v],-1)
+    if norm is not None:
+        for j,n in enumerate(norm):values[:,j]=(values[:,j]-n['mean'])/n['scale']
+        if item['family']=='heat':values[:,1]=0
+    return torch.tensor(values,dtype=torch.float32)
 
 class Dataset:
     def __init__(self,c,root,create=True):
-        from .training import prepare,data_config
-        from .contracts import grid_queries
-        self.c=c;self.root=Path(root);self.materialized=c.data_mode=='materialized'
-        if self.materialized:
-            if not (self.root/'dataset.json').exists():
-                if not create:raise ValueError('Missing recorded training data; restore it before resuming')
-                prepare(c,self.root)
-            self.metadata=read_json(self.root/'dataset.json')
-            if self.metadata['sha256']!=file_digest(self.root/'dataset.npz'):raise ValueError('Dataset checksum mismatch')
-            with np.load(self.root/'dataset.npz',allow_pickle=False) as f:self.values=f['values'].copy();self.parameters=f['diffusivity'].copy();self.q=torch.from_numpy(f['queries'].copy())
-        else:
-            from .optimization import options
-            self.q=grid_queries(data_config(c).grid) if c.temporal_mode!='continuous' else None
-            prefix=identity(c)[:16];ids=[f'{split}:{i}:{prefix}' for split,n in zip(('train','validation','test'),(c.train_count,c.validation_count,c.test_count)) for i in range(n)]
-            if (self.root/'dataset.json').exists():
-                self.metadata=read_json(self.root/'dataset.json')
-                if self.metadata['sha256']!=identity(c):raise ValueError('Procedural dataset identity changed; no silent regeneration on resume')
-            else:
-                if not create:raise ValueError('Missing dataset recipe; restore the complete run')
-                count=min(c.train_count,options(c)['calibration_count']);total=total2=points=0.;started=time.perf_counter()
-                for i in range(count):
-                    a=self.get('train',i)['values'].astype(np.float64);total+=a.sum();total2+=np.square(a).sum();points+=a.size
-                mean=total/points;scale=max(np.sqrt(max(0.,total2/points-mean*mean)),1e-6)
-                self.metadata={'schema_version':2,'kind':'coordinate_training_data','mode':'procedural','recipe':recipe(c),'sha256':identity(c),'ids':ids,
-                   'splits':[s for s,n in zip(('train','validation','test'),(c.train_count,c.validation_count,c.test_count)) for _ in range(n)],
-                   'normalization':{'mean':float(mean),'scale':float(scale),'fitted_ids':ids[:count]},'calibration_count':count,'preparation_seconds':time.perf_counter()-started,
-                   'distribution':'Deterministic periodic family mixture; reference regenerated on local CPU; no full GPU dataset or latent cache'}
-                write_json(self.root/'dataset.json',self.metadata)
+        self.c=c;self.root=Path(root);self.root.mkdir(parents=True,exist_ok=True);path=self.root/'dataset.json';prefix=identity(c)[:16];ids=[f'{s}:{i}:{prefix}' for s,n in zip(('train','validation','test'),(c.train_count,c.validation_count,c.test_count)) for i in range(n)]
+        # IDs do not require solving every realization.
+        if path.exists():
+            self.metadata=read_json(path)
+            if self.metadata['sha256']!=identity(c):raise ValueError('Dataset mixture/recipe identity changed')
+            return
+        if not create:raise ValueError('Missing representation dataset recipe; restore the run')
+        norms={};fit={};started=time.perf_counter()
+        for family in c.family_weights:
+            samples=[[],[]];fit[family]=[]
+            for i in range(min(c.train_count,max(12,c.training_options.get('calibration_count',12)))):
+                item=self.get('train',i)
+                if item['family']!=family:continue
+                fit[family].append(item['id'])
+                for t in (0.,.137,.4,.8):
+                    state=state_samples(item,item['context'],t,c).numpy()
+                    for j in range(2 if family=='wave' else 1):samples[j].append(state[:,j])
+            norms[family]=[{'mean':float(np.concatenate(a).mean()),'scale':max(float(np.concatenate(a).std()),1e-3)} if a else {'mean':0.,'scale':1.} for a in samples]
+        self.metadata={'schema_version':3,'kind':'coordinate_training_data','sha256':identity(c),'recipe':recipe(c),'ids':ids,'normalizations':norms,'fitted_ids':fit,'normalization':{**norms.get('heat',norms.get('wave'))[0],'fitted_ids':sum(fit.values(),[])},'preparation_seconds':time.perf_counter()-started}
+        write_json(path,self.metadata)
     @lru_cache(maxsize=8)
-    def get(self,split,index):
-        if not self.materialized:return example(self.c,split,int(index))
-        offset=0 if split=='train' else self.c.train_count if split=='validation' else self.c.train_count+self.c.validation_count
-        i=offset+int(index)
-        return {'values':self.values[i],'D':float(self.parameters[i]),'family':'legacy_smooth_random','id':self.metadata['ids'][i]}
+    def get(self,split,index):return example(self.c,split,int(index))
     def batch(self,indices,split='train',workers=0):
-        if workers:
-            from concurrent.futures import ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=workers) as pool:items=list(pool.map(lambda i:self.get(split,int(i)),indices))
-        else:items=[self.get(split,int(i)) for i in indices]
-        return torch.from_numpy(np.stack([x['values'] for x in items])),torch.tensor([x['D'] for x in items]),items
-
-
-def query_subset(c,generator):
-    """Unique, stratified space-time nodes. Each physical time has equal loss weight."""
-    spatial=int(np.prod(c.reference_shape));nt=len(c.times);n=min(c.query_points,spatial*nt)
-    if n<nt:raise ValueError('Query points must include at least one point per physical time')
-    indices=[];weights=[]
-    for t in range(nt):
-        count=n//nt+(t<n%nt);indices.append(torch.randperm(spatial,generator=generator)[:count]+t*spatial);weights.extend([1/(nt*count)]*count)
-    return torch.cat(indices),torch.tensor(weights)
+        items=[self.get(split,int(i)) for i in indices]
+        return torch.tensor(np.stack([x['values'] for x in items])),torch.tensor([x['parameter'] for x in items]),items

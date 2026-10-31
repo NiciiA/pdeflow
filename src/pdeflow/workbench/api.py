@@ -457,6 +457,7 @@ def create_app(model_roots=None, output_root=None, data_root=None, worker=None, 
         return {"rows": observation_rows(obs, p), "count": len(rows), "observations": obs.to_dict()}
 
     def resolve(payload):
+        raise ValueError("Legacy architecture — incompatible with current model. Use the heat playground joint model workflow. Existing artifacts remain available in storage.")
         p = ProblemSpec.from_dict(payload.problem)
         validate_inference_budget(p,InferenceConfig(**payload.inference))
         selection=payload.model_selection

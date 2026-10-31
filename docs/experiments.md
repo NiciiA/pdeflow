@@ -418,3 +418,39 @@ initial/time-stratum and spectral metrics on validation; keep test untouched. Sa
 comparison-plan-final/ configs are unexecuted. No winning loss/α/budget selected.
 Earlier Fourier inverse advantage and non-monotonic test-budget conclusions remain.
 Method/evidence: field-reconstruction-losses.md and field-loss-verification.md.
+
+## 30 October2026 — joint latent architecture execution
+
+Only tiny2-update representation/flow runs (plus one decoded auxiliary update)
+were executed for implementation. Known and unknown scalar-D inference use the
+same jointly trained architecture, without a hidden initial field or coefficient.
+CPU and actual MPS stop/resume, export and CPU reload passed; identical explicit
+latent noise gives maximum CPU/MPS output differences2.38e-7 knownD and2.09e-7
+unknownD for the retained MPS artifact. This is not accuracy/identifiability or
+uncertainty calibration evidence. CUDA and actual Colab execution remain untested.
+
+outputs/joint-latent-20261030/ contains manifests, counts, initial/final failures,
+repairs, real browser workflows, portable tiny checkpoints and preservation hashes.
+Large/XL are configuration/meta-count evidence only. Do not select budgets using
+test performance. Historical conventional Fourier inverse superiority and
+non-monotonic test-budget findings remain; no matched new-architecture accuracy
+comparison was run. The next bounded experiment is representation validation
+before a substantial conditional-flow training allocation.
+
+##30 October2026 — operator-aware shared heat/wave execution
+
+A1/A2/B were actually run with two updates each, including optimizer-boundary stop/
+resume, frozen dependency checks, portable export, one checkpoint for heat/wave and
+known/unknown D/c. Wave reference checks cover independent u0/v0, travelling/standing/
+velocity-only/zero/Nyquist modes, energy, arbitrary coordinates and domain lengths.
+The final tiny checkpoints and all evidence live in outputs/operator-wave-20261030/.
+
+These are pipeline checks. The representation is worse than the comparable constant
+baseline and reconstruction is poor; no scientific accuracy improvement is claimed.
+The historical conventional Fourier inverse remains better in its recorded studies;
+those studies also showed non-monotonic test quality across training budgets. They
+have not been repeated/ranked for this architecture. No budget was chosen using test
+performance. Region balance alpha=.5 is an experimental starting point and may trade
+whole-field/background accuracy for distinct-feature emphasis. Actual CPU and MPS
+execution are separate from local notebook-cell execution; CUDA/Colab remain untested.
+Next: bounded controlled A1 validation, then A2 dynamics validation, before larger B.

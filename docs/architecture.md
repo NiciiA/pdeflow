@@ -507,3 +507,27 @@ historical missing config remains point-sampled MSE. Workbench previews use actu
 training realizations/calibration; comparison endpoints are reference/evaluation
 only and cannot enter the inverse worker. FieldLossControls and the heat metric/map
 controls remain compact UI adapters. See field-reconstruction-losses.md.
+
+## Historical joint-v1 generator —30 October2026
+
+The previous playground used Physics-Conditioned Joint Latent Flow v1. The old
+stacked-frame and solution-only branches described above are historical research
+records. New heat2D runs use coupled solution/initial/scalar-D groups, known-status
+masks, typed physics/set conditioning and a frozen coordinate decoder. Full tensor,
+anchor, loss, export and compatibility contracts are in joint-latent-model.md.
+The modular numerical 1D–3D and chemistry/steering goal remains unchanged.
+
+## Active operator-aware physical-state v2 —30 October2026
+
+The current request replaces joint-v1 trajectory generation with factorized initial
+u / initial v (wave only) / typed scalar D or c, followed by a learned direct-time
+complete-state evolution and a spatial-only decoder. There is one shared heat/wave
+observation encoder, edge-aware directed PDE graph encoder, coupled flow processor,
+evolution backbone and decoding infrastructure; typed heads and masks handle schemas.
+A1 representation → A2 frozen-representation evolution → B frozen-physics CFM is the
+shared local/UI/Colab path. Strong residual derivatives pass through evolution.
+No conventional reference solver constructs neural dynamics. Static/weak branches
+are explicitly unsupported. The broader1D–3D chemistry/steering specification is
+preserved, with this bounded2D dynamic slice operational. Exact contracts, counts,
+normalization, topology and limitations: operator-wave-model.md. Evidence:
+operator-wave-verification.md. Old numerical/source/history remains attributable.

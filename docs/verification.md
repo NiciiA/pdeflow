@@ -872,3 +872,33 @@ tests, build/lint and real training/comparison browser checks. Logs distinguish
 overlapping counts, native/Chromium failures and successful isolated follow-ups.
 No substantial training or scientific superiority claim; CUDA/hosted Colab untested.
 All prior checkpoints/scientific outputs retained.
+
+## Current joint latent replacement —30 October2026
+
+See joint-latent-verification.md for this session's84 passing affected Python
+checks/two CUDA skips,19 frontend tests, real UI training/inference, local CPU
+notebook execution, CPU/MPS explicit-noise agreement and preservation evidence.
+These are execution/numerical contracts, not scientifically demonstrated accuracy.
+Prior generative results above are historical and use incompatible architectures.
+
+## Operator-aware heat/wave v2 —30 October2026
+
+The active shared model now uses A1 state representation → A2 learned graph-conditioned
+physical evolution → B initial-state/scalar conditional generation. Saved focused
+CPU/MPS numerical/training/API execution, actual browser workflows and local execution
+of notebook cells are recorded separately in `operator-wave-verification.md`, with
+initial failures and repairs retained. The two-update checkpoints are poor and the
+representation fails its constant-baseline gate; no scientific accuracy improvement,
+CUDA execution or actual Colab execution is claimed. Final continuation work checks
+source packaging, dependency/source compatibility, preservation and service shutdown
+without repeating training or bypassing the failed gate.
+
+## Training-equation wiring audit —30 October2026
+
+The focused training page inherited heat-only intent while hiding the family selector.
+A visible independent Heat/Wave/joint selector, joint default and configuration-derived
+summary now match actual data/stages. Region-balanced alpha=.5 remains actual decoded
+A1/A2 training; B remains latent CFM. Fresh tiny CPU stage/alpha-control execution,
+real API configuration traces and rendered browser evidence are recorded in
+`training-equations-verification.md`. Existing artifacts and accuracy limitations
+remain unchanged; no substantial training ran.
