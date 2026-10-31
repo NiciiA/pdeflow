@@ -1,7 +1,7 @@
 """Disposable, cancellable stage batch experiments shared by UI and notebook."""
 from dataclasses import replace
 from pathlib import Path
-import argparse,json,math,os,signal,subprocess,sys,time,uuid
+import argparse,json,math,os,signal,subprocess,sys,time,uuid,traceback
 from pdeflow.runtime import read_json,write_json,digest,RuntimeSpec
 from pdeflow.training_settings import STAGES,TOTALS,resolve_batches,configure,positive
 
@@ -142,7 +142,50 @@ def selected_settings(c,record,selections=None,recommended=False):
     return {'effective_batch':effective,'microbatch':base,'stages':{**c.training_options.get('stage_batches',{}),**{s:{'microbatch':x['microbatch']} for s,x in chosen.items()}}}
 
 
+def failure(error,root):
+    root=Path(root);root.mkdir(parents=True,exist_ok=True)
+    trace=traceback.format_exc();(root/'error-traceback.txt').write_text(trace)
+    print(trace,file=sys.stderr,flush=True)
+    result={'status':'oom' if isinstance(error,__import__('torch').OutOfMemoryError) else 'error',
+            'error':str(error),'error_type':type(error).__name__,'traceback':trace,
+            'traceback_path':str(root/'error-traceback.txt')}
+    if (root/'run.json').exists():
+        record=read_json(root/'run.json')
+        for key in ('attempted_updates','successful_optimizer_updates','skipped_updates','history','normalizations'):
+            if key in record:result[key]=record[key]
+        result['successful_updates']=record.get('successful_optimizer_updates',0)
+        rows=record.get('history',[])
+        result['scales']=[r.get('scaler_scale') for r in rows]
+        result['numerically_finite']=all(math.isfinite(r['training_loss']) and r['gradients_finite'] for r in rows) if rows else None
+        result['nonfinite_gradient_attempts']=sum(not r['gradients_finite'] for r in rows)
+    return result
+
+
+def failure_details(record):
+    """Plain text shared by the notebook; show failures even before any trial runs."""
+    lines=[]
+    if record.get('error'):lines.append(f"FAILED: {record.get('error_type','Error')}: {record['error']}")
+    for stage,anchor in record.get('anchors',{}).items():
+        lines.append(f"Anchor {stage}: {anchor.get('status')}; attempted={anchor.get('attempted_updates')}, successful={anchor.get('successful_updates')}, skipped={anchor.get('skipped_updates')}; scales={anchor.get('scales', [r.get('scaler_scale') for r in anchor.get('history',[])])}")
+        if anchor.get('error'):lines.append(anchor['error'])
+        invalid=[r['overflow_diagnostics'] for r in anchor.get('history',[]) if 'overflow_diagnostics' in r]
+        if invalid:lines.append('Last overflow diagnostics: '+json.dumps(invalid[-1],sort_keys=True))
+        if anchor.get('traceback'):lines.append(anchor['traceback'])
+        if anchor.get('process_log'):lines.append('Process log: '+anchor['process_log'])
+    for row in record.get('rows',[]):
+        if row.get('error'):
+            lines.append(f"{row['stage']} microbatch={row['microbatch']}: {row['error']}")
+            if row.get('traceback'):lines.append(row['traceback'])
+    if record.get('traceback'):lines.append(record['traceback'])
+    return '\n'.join(lines)
+
+
 def worker(job):
+    try:_worker(job)
+    except Exception as error:write_json(Path(job['root'])/'result.json',failure(error,job['root']))
+
+
+def _worker(job):
     import torch,numpy as np
     from .coordinate.contracts import CoordinateConfig
     from .coordinate.training import train,read_checkpoint
@@ -168,13 +211,15 @@ def worker(job):
             timing=distribution([r['end_to_end_seconds'] for r in measured]);skips=sum(r['optimizer_update_skipped'] for r in rows);wall=sum(r['end_to_end_seconds'] for r in measured)
             total=torch.cuda.get_device_properties(0).total_memory if torch.cuda.is_available() else None
             result={'status':'completed' if len(measured)>=5 else 'insufficient_measurements','median_seconds':timing['median'],'mean_seconds':timing['mean'],'std_seconds':timing['std'],'distribution':timing,
-              'examples_per_second':sum(c.batch_size for _ in measured)/wall,'successful_updates_per_second':sum(not r['optimizer_update_skipped'] for r in measured)/wall,'skipped_updates':skips,'numerically_finite':all(math.isfinite(r['training_loss']) and (r['gradients_finite'] or r['optimizer_update_skipped']) for r in rows),
+              'examples_per_second':sum(c.batch_size for _ in measured)/wall,'successful_updates_per_second':sum(not r['optimizer_update_skipped'] for r in measured)/wall,'skipped_updates':skips,'numerically_finite':all(math.isfinite(r['training_loss']) and r['gradients_finite'] for r in rows),'nonfinite_gradient_attempts':sum(not r['gradients_finite'] for r in rows),'overflow_skips_handled':all(r['gradients_finite'] or r['optimizer_update_skipped'] for r in rows),
               'peak_allocated':record['memory'].get('cuda_peak_allocated'),'peak_reserved':record['memory'].get('cuda_peak_reserved'),'peak_host_rss':record['memory'].get('process_peak_host_rss_bytes'),'gpu_total_bytes':total,
               'actual_forward_sizes':sorted({n for r in rows for n in r['forward_microbatch_sizes']}),'attempted_updates':cp['attempted_updates'],'successful_updates':cp['progress'],'examples_processed':cp['effective_examples_processed'],
               'setup_seconds':record['setup_seconds'],'first_cold_update_seconds':rows[0]['end_to_end_seconds'],'warmup_seconds':sum(r['end_to_end_seconds'] for r in rows[:job['warmup']]),'final_persistence_seconds':record['final_persistence_and_calibration_seconds'],
               'preparation':rows[-1]['frozen_preparation'],'validation_seconds':sum(r.get('validation_seconds',0) for r in rows),'checkpoint_seconds':sum(r.get('persistence_seconds',0) for r in rows),'scales':[r['scaler_scale'] for r in rows],'history':rows,'validation_loss':rows[-1].get('validation_loss'),'all_in_seconds':time.perf_counter()-begin}
-    except torch.OutOfMemoryError as error:result={'status':'oom','error':str(error)}
-    except (FloatingPointError,RuntimeError,ValueError) as error:result={'status':'error','error':str(error),'error_type':type(error).__name__}
+        if job.get('role')=='anchor':
+            result.update(status='completed' if cp['completed'] and cp['progress']==job['successful_updates'] else 'insufficient_successful_updates',role='anchor',required_successful_updates=job['successful_updates'],maximum_attempts=job['attempts'])
+            if result['status']!='completed':result['error']='Anchor stopped before required successful optimizer updates; inspect skips, cancellation and runtime cap'
+    except Exception as error:result=failure(error,root)
     if job.get('learning') and result.get('status') in ('completed','insufficient_measurements') and (root/'resume.pt').exists():
         from .coordinate import validation
         validation_started=time.perf_counter()
@@ -207,7 +252,8 @@ def run(root):
                 if interrupted and time.time()>deadline:child.terminate();break
                 time.sleep(.15)
             child.wait()
-        return read_json(execution/'result.json') if (execution/'result.json').exists() else {'status':'cancelled' if interrupted else 'error','error':'Candidate process ended; inspect '+str(path/'process.log')}
+        result=read_json(execution/'result.json') if (execution/'result.json').exists() else {'status':'cancelled' if interrupted else 'error','error':'Candidate process ended without result; exit='+str(child.returncode),'traceback':(path/'process.log').read_text()[-262144:]}
+        result['process_log']=str(path/'process.log');return result
     try:
         dependencies={};anchor_opts={**c.training_options,'precision':policy,'execution':'batched'}
         anchor=replace(c,ae_steps=2,evolution_steps=2,flow_steps=2,training_options=anchor_opts)
@@ -216,9 +262,15 @@ def run(root):
         for stage in needed:
             if cancelled():break
             dep=dependencies.get('autoencoder') if stage=='evolution' else None
-            result=launch({'config':anchor.to_dict(),'stage':stage,'dependency':dep,'warmup':0,'attempts':2},root/'anchors'/stage)
+            # Before N successes, at most N*(overflow_limit-1) skips can occur
+            # without hitting the trainer's existing consecutive-overflow failure.
+            # Keep one scaler alive; stop on successes, cancel, wall cap or this bound.
+            result=launch({'config':anchor.to_dict(),'stage':stage,'dependency':dep,'warmup':0,'role':'anchor','successful_updates':2,'attempts':2*o['max_consecutive_overflows']},root/'anchors'/stage)
+            r.setdefault('anchors',{})[stage]=result;write_json(root/'experiment.json',r)
+            if cancelled():break
             path=root/'anchors'/stage/'stage'/('autoencoder.pt' if stage=='autoencoder' else 'evolution.pt')
-            if not path.exists():raise ValueError('Disposable anchor failed: '+str(result))
+            if result['status']!='completed' or not path.exists():
+                raise ValueError(f"Disposable {stage} anchor failed: {result.get('error',result['status'])}; successful={result.get('successful_updates',0)}/2, attempted={result.get('attempted_updates')}. See anchors in this report and {result['process_log']}")
             dependencies[stage]=str(path.resolve())
         failed={};cold={}
         for i,row in enumerate(r['rows']):
@@ -243,7 +295,11 @@ def run(root):
         for row in r['rows']:
             if row['status'] in ('pending','running'):row.update(status='cancelled',reason='Cancellation/runtime cap; partial results preserved')
         r['state']='cancelled' if cancelled() else 'completed'
-    except Exception as error:r.update(state='failed',error=str(error))
+    except Exception as error:
+        r.update(state='failed',error=str(error),error_type=type(error).__name__,traceback=traceback.format_exc())
+        (root/'error-traceback.txt').write_text(r['traceback'])
+        for row in r['rows']:
+            if row['status'] in ('pending','running'):row.update(status='blocked',reason='Experiment failed before this candidate completed: '+str(error))
     finally:r['elapsed_seconds']=time.time()-started;write_json(root/'experiment.json',r)
 
 

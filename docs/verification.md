@@ -932,3 +932,34 @@ subprocess benchmark isolation, budget/skip/scheduler/resume, real seven-cell lo
 notebook chain, frontend checks and actual rendered MPS benchmark/apply/training.
 CUDA/actual Colab/Drive and1024 memory fit remain unverified. OOM/overflow mocks are
 labelled as control tests. Scientific artifacts are covered by before/after hashes.
+
+## FP16 disposable-anchor failure recovery —31 October2026
+
+Evidence: `outputs/anchor-fp16-recovery-20261031/`; implementation and exact
+same-Medium-job T4 instructions: [anchor-fp16-recovery.md](anchor-fp16-recovery.md).
+
+- Focused suite:23 passed,1 native-CUDA check skipped. Real CPU GradScaler with
+  injected invalid gradients reproduces two attempts/zero successes and scale
+  65536→32768→16384; corrected anchor reaches two successes in four attempts.
+  Persistent injection fails at the existing eight-consecutive-overflow bound,
+  preserving resume state and full traceback. Parent failure blocks pending rows
+  and renders the underlying cause; cancellation/runtime tests make zero updates.
+- Affected numerical/Colab suite:49 passed,3 CUDA checks skipped. Covers actual
+  MPS FP32 A1/A2/B, CPU per-objective batched/accumulated loss and gradient parity,
+  frozen-target reference/cache semantics, precision policy, optimizer/resume and
+  notebook-cell compilation. Counts overlap the focused suite; not76 unique tests.
+- Separate actual CPU subprocess integration:1 passed, preparing two-update A1/A2
+  anchors then six-attempt A2/B candidate trials. Separate real CPU scaler
+  checkpoint/resume:1 passed, restoring scale16384 and advancing only successes.
+- All seven delivered notebook code cells and both documented T4 procedure snippets
+  compile. Shared notebook failure output is saved in `notebook-failure-output.txt`.
+  No browser/frontend changes or repeated full browser suite were needed.
+- Initial sandbox run:19 passed,1 skipped,4 failed. One assertion incorrectly read
+  optimizer/scaler metadata from the portable export; corrected to `resume.pt`.
+  Three subprocess cases hit macOS sandbox child-process aborts. The focused suite
+  then passed outside the sandbox; the failed log is retained, not hidden.
+
+Native CUDA FP16 startup/accuracy and actual Colab execution remain unverified.
+Finite T4 losses and sensible normalization do not prove finite backpropagation;
+the two supplied attempts cannot distinguish transient scaler overflow from a
+persistent operation-level issue. No full training or gate bypass occurred.

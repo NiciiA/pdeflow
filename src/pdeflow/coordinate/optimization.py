@@ -113,9 +113,32 @@ def representation_contract(c):
     return value
 
 
+def gradient_diagnostics(named_parameters):
+    """Exceptional-path diagnostics on unscaled, unclipped gradients only."""
+    invalid=[];count=0
+    for name,p in named_parameters:
+        if p.grad is None:continue
+        bad=~torch.isfinite(p.grad.detach())
+        n=int(bad.sum())
+        if n:
+            count+=1
+            if len(invalid)<12:invalid.append({'parameter':name,'nonfinite_elements':n,'elements':p.grad.numel()})
+    return {'nonfinite_parameter_count':count,'first_nonfinite_parameters':invalid,
+            'scope':'unscaled gradients before clipping; first 12 invalid parameter tensors'}
+
+
 def optimizer_step(optimizer,scaler,parameters,clip,policy):
+    parameters=list(parameters)
     scaler.unscale_(optimizer)
-    grad=torch.nn.utils.clip_grad_norm_(parameters,clip,error_if_nonfinite=policy!='fp16')
+    try:
+        # Raising before clipping leaves invalid gradients intact for diagnostics.
+        grad=torch.nn.utils.clip_grad_norm_(parameters,clip,error_if_nonfinite=True)
+    except RuntimeError as error:
+        if policy!='fp16' or 'non-finite' not in str(error):raise
+        if all(bool(torch.isfinite(p.grad).all()) for p in parameters if p.grad is not None):
+            # GradScaler would NOT skip this: never step after a norm-only overflow.
+            raise FloatingPointError('Nonfinite gradient norm with finite gradient elements; optimizer not stepped')
+        grad=torch.tensor(float('inf'))
     old_scale=scaler.get_scale();scaler.step(optimizer);scaler.update()
     finite=math.isfinite(float(grad));skipped=policy=='fp16' and scaler.get_scale()<old_scale
     if not finite and not skipped:raise FloatingPointError('Nonfinite gradients without skipped optimizer update')

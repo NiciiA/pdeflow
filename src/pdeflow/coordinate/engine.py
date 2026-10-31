@@ -290,6 +290,9 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                     for item,loss in zip(group,losses):
                         loss_value=loss.detach().float();batch_loss+=loss_value/c.batch_size;per_family.setdefault(item['family'],[]).append(loss_value)
                     with timings.measure('backward_compute'):scaler.scale(torch.stack(list(losses)).sum()/c.batch_size).backward()
+                batch_loss=float(batch_loss)
+                if not math.isfinite(batch_loss):raise FloatingPointError('Nonfinite stage loss; optimizer not stepped')
+                scale_before=scaler.get_scale()
                 with timings.measure('optimizer_compute'):
                     from .optimization import optimizer_step
                     grad,finite,skipped=optimizer_step(optimizer,scaler,[p for p in model.parameters() if p.requires_grad],settings['gradient_clip'],policy)
@@ -297,12 +300,13 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 if skipped:skipped_total+=1;overflow_streak+=1
                 else:step+=1;overflow_streak=0
                 synchronize(device);elapsed=time.perf_counter()-tick
-                batch_loss=float(batch_loss)
-                if not math.isfinite(batch_loss):raise FloatingPointError('Nonfinite stage loss')
                 measured=timings.report()
                 frozen_report=targets.report()
                 cache_report=({'hits_cumulative':frozen_report['memory_hits']+frozen_report['disk_hits']+frozen_report['deduplicated_requests'],'misses_cumulative':frozen_report['misses'],'hits_this_step':frozen_report['memory_hits']+frozen_report['disk_hits']+frozen_report['deduplicated_requests']-prior_targets[0],'misses_this_step':frozen_report['misses']-prior_targets[1],'items':frozen_report['items'],'bytes':frozen_report['bytes']} if use_batch else {'hits_cumulative':cache_hits,'misses_cumulative':cache_misses,'hits_this_step':cache_hits-prior_frozen[0],'misses_this_step':cache_misses-prior_frozen[1],'items':len(frozen),'bytes':sum(x.numel()*x.element_size() for values in frozen.values() for x in values)})
                 row={'step':step,'attempted_update':attempted,'successful_optimizer_updates':step,'skipped_updates_total':skipped_total,'consecutive_overflows':overflow_streak,'configured_batch':__import__('pdeflow.training_settings',fromlist=['resolve_batches']).resolve_batches(c)[stage],'training_loss':batch_loss,'family_example_counts':{k:sum(x['family']==k for x in items) for k in names},'per_family_loss':{k:float(torch.stack(v).mean()) for k,v in per_family.items()},'components':scalarize(components),'gradient_norm':float(grad) if finite else None,'gradients_finite':finite,'optimizer_update_skipped':skipped,'scaler_scale':scaler.get_scale(),'learning_rate':lr,'step_seconds':elapsed,'data_seconds':sum((measured or {}).get('host_exclusive_seconds',{}).get(k,0.) for k in ('dataset_initial_reference','reference_evaluation','region_analysis')),'component_timings':measured,'data_seconds_definition':'Sum of exclusive host reference evaluation, region analysis and dataset construction; see nested component scopes for packing/other preprocessing. Prefetched CPU reference work is separately recorded in frozen_preparation_step; it can overlap compute and is not added here.', 'timing_semantics':'Per-update synchronized wall time, excluding validation/persistence. Nested component scopes explicitly labelled. No cumulative counter is a step cost.','elapsed_seconds':time.perf_counter()-started,'effective_examples':effective_examples,'frozen_cache':cache_report,'region_cache':{'hits_cumulative':cache.hits,'misses_cumulative':cache.misses,'hits_this_step':cache.hits-prior_region[0],'misses_this_step':cache.misses-prior_region[1]},'frozen_preparation':frozen_report,'frozen_preparation_step':{k:v-prior_preparation.get(k,0) for k,v in targets.stats.items() if k!='maximum_encoding_batch'},'microbatch_semantics':'A1/A2/default B use actual mixed-family neural microbatches; losses sum per example / effective batch. Explicit accumulated control and optional B auxiliaries remain serial.','actual_forward_microbatch':max(forward_sizes),'forward_microbatch_sizes':forward_sizes,'quantity_forward_microbatch_sizes':quantity_sizes}
+                if skipped:
+                    from .optimization import gradient_diagnostics
+                    row['overflow_diagnostics']={**gradient_diagnostics(model.named_parameters()),'scale_before':scale_before,'scale_after':scaler.get_scale(),'loss_finite':True}
                 if not skipped and (step%o['validation_every']==0 or step==total):
                     ae.eval();model.eval();state=g.get_state();val={};vt=time.perf_counter()
                     with torch.enable_grad() if jo['auxiliary']['pde']>0 else torch.no_grad():
@@ -315,12 +319,12 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 row['persistence_seconds']=time.perf_counter()-persistence_started
                 row['end_to_end_seconds']=time.perf_counter()-tick
                 if overflow_streak>=o['max_consecutive_overflows']:
-                    save(False);raise FloatingPointError('Repeated FP16 overflow: '+str(overflow_streak)+' consecutive skipped attempts; reduce explicit initial scale or inspect gradients. Scheduler did not advance.')
+                    save(False);raise FloatingPointError('Repeated FP16 overflow: '+str(overflow_streak)+' consecutive skipped attempts; see overflow_diagnostics in history.json/resume.pt for unscaled invalid parameter names and scale history. Startup recovery was bounded, not established. Scheduler did not advance.')
                 if stop_after and since>=stop_after:break
             final_save_started=time.perf_counter();save(step>=total);record['final_persistence_and_calibration_seconds']=time.perf_counter()-final_save_started
             record['total_wall_seconds']=time.perf_counter()-setup_started;write_json(root/'run.json',record)
         except BaseException as error:
-            record.update(state='interrupted' if isinstance(error,KeyboardInterrupt) else 'failed',error=str(error));write_json(root/'run.json',record);raise
+            record.update(state='interrupted' if isinstance(error,KeyboardInterrupt) else 'failed',error=str(error),error_type=type(error).__name__,traceback=__import__('traceback').format_exc());write_json(root/'run.json',record);raise
         finally:
             targets.close()
             if previous is not None:signal.signal(signal.SIGINT,previous)

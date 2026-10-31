@@ -834,3 +834,16 @@ memory is never assumed to imply throughput. Applying a result is distinct from
 benchmark completion and actual training. Successful updates alone advance scheduler/
 progress; overflow attempts/examples and consecutive failures persist independently.
 See docs/batch-settings.md for exact semantics and evidence; CUDA remains unverified.
+
+## Disposable FP16 anchors use successful-update completion —31 October2026
+
+Anchor exports require two successful optimizer updates. The old two-attempt
+budget could be exhausted entirely by scaler backoff. Preserve the existing
+consecutive-overflow limit; derive the total anchor-attempt ceiling from that
+limit and the successful goal, and keep one scaler alive. Timing candidates
+retain their explicit attempted-example comparison budgets. A handled overflow
+is not numerically finite or a successful update. Preserve invalid-gradient
+locations before clipping, fail a norm-only overflow before optimizer mutation,
+and retain worker/parent tracebacks in reports and notebook output. The supplied
+T4 logs cannot establish whether the two initial overflows are temporary; native
+CUDA recovery remains unverified locally. See docs/anchor-fp16-recovery.md.

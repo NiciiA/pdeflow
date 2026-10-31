@@ -842,3 +842,15 @@ or successful progress. Fixed-example experiments count attempts/exposure; fixed
 successful updates need not have equal exposure, especially across B or overflows.
 Approximate example-preserving budgets round remaining updates up; the extra
 examples and existing two-update B floor are explicit. No LR scaling is implied.
+
+### FP16 attempts and successful updates
+
+A field/latent objective is unchanged by loss scaling: GradScaler scales its
+backward pass, unscales accumulated gradients once, checks/clips and steps once.
+An invalid-element FP16 attempt is skipped and lowers the scale; it contributes
+attempted examples but no optimizer update or learning-rate progress. With an
+existing consecutive-overflow limit L, an anchor requiring N successful updates
+needs at most N*L attempted updates without first hitting that failure limit.
+A finite loss does not imply finite gradients. A finite-element global-norm
+overflow must fail before stepping because element-based scaler detection cannot
+catch it. See docs/anchor-fp16-recovery.md for failure diagnostics and evidence.

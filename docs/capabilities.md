@@ -332,3 +332,14 @@ Details/evidence: field-reconstruction-losses.md, field-loss-verification.md.
 | Performance recovery | Implemented and bounded CPU/MPS execution verified | Native precision selection policy, bounded batched spectral references, exact-key frozen caches, actual default-B microbatches, reconciled step/nested timing | docs/training-performance.md; outputs/performance-20261031/ | Actual T4/CUDA/Colab speed and FP16 execution still require the supplied same-config benchmark; no accuracy claim |
 | Actual A1/A2/B neural batching | CPU loss/full-gradient and MPS execution verified | Mixed-family batches, per-realization/quantity weighting, bounded exact-time frozen prefetch/cache and separate preparation clocks | docs/batched-training.md; outputs/batching-20261031/ | Medium/T4/CUDA FP16 speed, fit and accuracy remain unverified; optional B auxiliaries retain serial execution |
 | Batch configure/experiment/apply | Implemented; real CPU notebook and MPS browser chain | Per-stage batching, explicit application to authoritative Session/request, separate budget modes and successful-step accounting | docs/batch-settings.md; outputs/batch-settings-20261031/ | CUDA/actual Colab/Drive and large1024 fit unverified; pipeline models are not accuracy evidence |
+
+### FP16 anchor recovery —31 October2026
+
+| Capability | Actual evidence | Limit |
+|---|---|---|
+| Successful-update anchor completion, bounded overflow recovery | Real CPU GradScaler with two injected overflows, four attempts/two successes; persistent failure at eight skips; scaler resume test | Controlled invalid-gradient injection, CPU FP32 neural execution |
+| Worker/parent traceback and notebook failure details | Saved failure records, blocked pending candidates, compiled notebook and rendered shared text | No original T4 traceback supplied; cannot recover it retroactively |
+| Shared-stage valid-gradient behavior | CPU loss/gradient parity and actual MPS FP32 A1/A2/B; real subprocess A1/A2 anchors and A2/B trials | Smoke execution, no new scientific accuracy evidence |
+| Native CUDA FP16 startup recovery | Guarded tests and exact original-job T4 procedure included | CUDA unavailable locally; must execute on T4 |
+
+See docs/anchor-fp16-recovery.md and outputs/anchor-fp16-recovery-20261031/.

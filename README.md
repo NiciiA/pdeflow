@@ -156,3 +156,8 @@ physically exact; sparse unknown-state/parameter inference may be ambiguous. Res
 and invariants are measured. Static/weak branches, forcing, new boundaries and other
 neural dimensions/geometries are unsupported by this v2 specialist; numerical research
 modules and historical outputs remain available.
+
+Colab FP16 anchor failure/reload: [bounded recovery and T4 verification](docs/anchor-fp16-recovery.md).
+The two-attempt anchor bug is repaired; skipped gradients are no longer labelled
+finite, and cell4 displays failures and tracebacks. CPU scaler-control and MPS
+checks are separate from native CUDA/T4 verification, which remains outstanding.
