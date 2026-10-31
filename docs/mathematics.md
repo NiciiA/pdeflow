@@ -815,3 +815,18 @@ memoization introduce no temporal quantization. Region queries/masks, alpha=.5
 blend and per-solution/per-time/per-quantity reductions remain unchanged. B true
 microbatch losses are summed and divided by the same effective batch, preserving
 the original CFM objective up to numerical batching/reduction roundoff.
+
+## Batched physical-state objective reduction
+
+For realization i, let Q_i={u} (heat) or {u,v} (wave). The field objective is
+F_i=(1/|Q_i|) sum_q L_iq, where L_iq remains the selected per-time stratified
+whole-domain/region-balanced loss. The optimizer objective is sum_i J_i/B for the
+fixed effective realization batch B; a shorter final microbatch contributes its
+sum divided by B. Do not replace this by a pooled average of all quantities or
+regions in the batch. Family mixture probabilities remain in realization sampling.
+A2 latent alignment/composition use each realization's active-token denominator;
+decoded composition also averages quantities within each realization first.
+B retains its per-realization/group-masked CFM velocity objective. Batched graph
+embeddings share the same differentiable graph network; reuse inside one forward
+does not freeze the A2 graph parameters. Exact-time frozen encoder memoization
+changes neither the physical-time proposal nor the supervision/conditioning RNG.

@@ -911,3 +911,15 @@ loss/gradient parity, MPS failure/fix, local notebook execution and source-packa
 verification. Actual CUDA/Colab timing and FP16 remain unverified; supplied T4
 benchmark preserves requested capacity/points/objective and never launches full
 training. Existing scientific outputs are covered by before/after hash records.
+
+## Actual A1/A2 neural batching —31 October2026
+
+See [batched-training.md](batched-training.md), outputs/batching-20261031/.
+93 affected tests passed,2 CUDA-only skipped; final preparation suite35 passed;
+actual final MPS A1/A2/B plus cache-key check2 passed,1 CUDA check skipped.
+Counts overlap. Notebook2 tests passed including the actual local six-cell CPU/
+IPython path. All8/16/32 smoke-capacity cold/warm benchmark variants completed
+at the same effective32, FP32 and immutable dependencies. CPU full-gradient
+comparisons cover all four field objectives and A2/B; no actual T4 speed/memory
+or CUDA FP16 verification is claimed. Packaging/preservation checks are recorded
+separately at completion, with no full training or existing artifact alteration.

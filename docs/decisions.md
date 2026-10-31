@@ -797,3 +797,22 @@ persistent snapshots. Existing artifacts remain untouched and strict source resu
 checks are retained. See docs/training-performance.md for before/after evidence,
 limitations, original-source benchmark and exact notebook reload steps. No T4 speed
 or scientific accuracy improvement is claimed from local CPU measurements.
+
+## Actual representation batches and immutable preparation —31 October2026
+
+A1/A2 now execute real mixed heat/wave neural microbatches; wave-only velocity
+indices avoid pooling absent quantities. Sum per-realization losses over the
+unchanged effective batch. Preserve the accumulated execution control for strict
+loss/gradient comparisons. Share each trainable A2 graph embedding across its
+transition/composition calls without detaching gradients.
+
+Hash the large frozen identity once at setup, not once per state query. Resolve
+unique exact-time requests through a bounded CPU LRU and one inventoried local
+initial-state disk cache; batch frozen encoder misses, with one next CPU reference
+chunk prefetched. Keep newly encoded current-batch latents on the device and pack
+CPU hits for one transfer. Separate lookup/key/reference/encoder/serialization/disk
+clocks and per-step/cumulative counters. No observation/noise/disclosure cache.
+Actual8/16/32 sweep uses one explicit effective batch>=32 for every variant; an
+original effective8 comparison must instead use microbatches<=8. Never silently
+change the training preset to achieve a throughput result. Evidence and limits:
+docs/batched-training.md. Medium/T4 measurements still require the supplied sweep.

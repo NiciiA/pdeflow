@@ -3,6 +3,8 @@ from pathlib import Path
 from contextlib import nullcontext
 from collections import OrderedDict
 from .profiling import Timings,host_peak_bytes
+from .frozen import FrozenTargets
+from . import batching
 import os,time,signal,threading,math
 import numpy as np
 import torch
@@ -54,7 +56,7 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
     c=CoordinateConfig(**config).validate();o=options(c);jo=joint_options(c)
     if stage not in ('autoencoder','evolution','flow'):raise ValueError('Stages: autoencoder(A1), evolution(A2), flow(B)')
     from .physics import training_spec
-    physics=training_spec(c)
+    physics=training_spec(c);resolved_config=c.to_dict();config_identity=digest(resolved_config);source_identity=scientific_source();joint_schema=schema(c)
     root=Path(output).resolve();root.mkdir(parents=True,exist_ok=True);device,_=RuntimeSpec(**c.runtime).resolve();policy,amp=precision(o['precision'],device)
     autocast=lambda:torch.autocast(device.type,dtype=amp) if policy!='fp32' else nullcontext()
     total=getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[stage]);saved=None;source_override=False;effective_examples=0;dep=None;dependency_cp=None;settings=o[stage]
@@ -68,7 +70,7 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             if dependency is None:raise ValueError('Stage '+stage+' requires its frozen preceding stage')
             expected='autoencoder' if stage=='evolution' else 'evolution';dependency=Path(dependency).resolve();dependency_cp,dc=read_checkpoint(dependency,expected)
             if not dependency_cp['completed'] or representation_contract(c)!=representation_contract(dc):raise ValueError('Incompatible/uncompleted representation/evolution dependency')
-            if dependency_cp['scientific_source']['sha256']!=scientific_source()['sha256'] and not o['allow_source_change']:raise ValueError('Frozen dependency scientific source differs')
+            if dependency_cp['scientific_source']['sha256']!=source_identity['sha256'] and not o['allow_source_change']:raise ValueError('Frozen dependency scientific source differs')
             dep={'path':os.path.relpath(dependency,root),'sha256':file_digest(dependency),'stage':expected,'progress':dependency_cp['progress']}
             if saved and saved['dependency']!=dep:raise ValueError('Frozen stage dependency changed')
         data=Dataset(c,root if stage=='autoencoder' else (dependency.parent/dependency_cp['dataset_root']).resolve() if dependency_cp.get('dataset_root') else dependency.parent,create=stage=='autoencoder' and not resume)
@@ -86,13 +88,16 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             if stage=='flow':model.load_state_dict(saved['velocity'])
             optimizer.load_state_dict(saved['optimizer']);scaler.load_state_dict(saved['scaler']);g.set_state(saved['rng']);torch.set_rng_state(saved['torch_rng']);step=saved['progress'];history=saved['history'];effective_examples=saved.get('effective_examples_processed',step*c.batch_size);mean=saved['latent_mean'];scale=saved['latent_scale']
             if device.type=='cuda' and saved.get('cuda_rng'):torch.cuda.set_rng_state_all(saved['cuda_rng'])
-        record={'kind':'coordinate_stage_run','id':root.name,'schema_version':2,'architecture':ARCHITECTURE,'stage':stage,'training_physics':physics,'specialist':'heat+wave' if len(c.family_weights)>1 else next(iter(c.family_weights)),'config':c.to_dict(),'source':code_identity(),'scientific_source':scientific_source(),'config_identity':digest(c.to_dict()),'state':'preparing','progress':step,'budget':total,'pid':os.getpid(),'created_at':now(),'export':str(root/('autoencoder.pt' if stage=='autoencoder' else 'evolution.pt' if stage=='evolution' else 'coordinate.pt')),'dependency':dep}
-        write_json(root/'run.json',record);write_json(root/'config.json',c.to_dict());cache=AnalysisCache();started=time.perf_counter();stop=[False];previous=None
+        record={'kind':'coordinate_stage_run','id':root.name,'schema_version':2,'architecture':ARCHITECTURE,'stage':stage,'training_physics':physics,'specialist':'heat+wave' if len(c.family_weights)>1 else next(iter(c.family_weights)),'config':resolved_config,'source':code_identity(),'scientific_source':source_identity,'config_identity':config_identity,'state':'preparing','progress':step,'budget':total,'pid':os.getpid(),'created_at':now(),'export':str(root/('autoencoder.pt' if stage=='autoencoder' else 'evolution.pt' if stage=='evolution' else 'coordinate.pt')),'dependency':dep}
+        write_json(root/'run.json',record);write_json(root/'config.json',resolved_config);cache=AnalysisCache();started=time.perf_counter();stop=[False];previous=None
         if threading.current_thread() is threading.main_thread():previous=signal.signal(signal.SIGINT,lambda *_:stop.__setitem__(0,True))
         components={};timings=Timings(device,o['profile_components']);cache.profiler=timings;frozen=OrderedDict();cache_hits=0;cache_misses=0;frozen_graphs={}
         if device.type=='cuda':torch.cuda.reset_peak_memory_stats(device)
-        cache_identity={'data':data.metadata['sha256'],'dependency':dep,'sampling':c.encoder_points,'normalizations':norms,'latent_mean':mean.tolist() if mean is not None else None,'latent_scale':scale.tolist() if scale is not None else None,'schema':schema(c),'scientific_source':scientific_source()['sha256'],'precision':policy,'sampling_identity':{'seed':c.seed,'context':'fixed deterministic example.context; physical t=0 for disk targets'},'version':2};cache_root=root/'latent-targets'/digest(cache_identity)
-        if stage=='flow' and jo['target_cache']:cache_root.mkdir(parents=True,exist_ok=True);write_json(cache_root/'identity.json',cache_identity)
+        cache_identity={'data':data.metadata['sha256'],'dependency':dep,'sampling':c.encoder_points,'normalizations':norms,'latent_mean':mean.tolist() if mean is not None else None,'latent_scale':scale.tolist() if scale is not None else None,'schema':joint_schema,'scientific_source':source_identity['sha256'],'precision':policy,'sampling_identity':{'seed':c.seed,'context':'fixed deterministic example.context; physical t=0 for disk targets'},'version':3};cache_hash_started=time.perf_counter();cache_prefix=digest(cache_identity);record['cache_identity_hash_seconds_setup']=time.perf_counter()-cache_hash_started;cache_root=root/'latent-targets'/cache_prefix
+        if stage!='autoencoder' and jo['target_cache']:cache_root.mkdir(parents=True,exist_ok=True);write_json(cache_root/'identity.json',cache_identity)
+
+        targets=FrozenTargets(cache_prefix,o['frozen_cache_items'],timings,cache_root if stage!='autoencoder' and jo['target_cache'] else None,o['frozen_prefetch'])
+        latent_mean_device=mean.to(device) if mean is not None else None;latent_scale_device=scale.to(device) if scale is not None else None
 
         def attach(item):
             item['solver'].profiler=timings
@@ -103,7 +108,7 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             attach(item)
             # Frozen only; include exact continuous time, representation/data/
             # normalization/coordinate identity, precision/autocast and mode.
-            key=(digest(cache_identity),item['id'],float(t),complete,torch.is_autocast_enabled(device.type))
+            key=(cache_prefix,item['id'],float(t),complete,torch.is_autocast_enabled(device.type))
             use_cache=stage!='autoencoder' and o['performance_mode']=='optimized'
             if use_cache and key in frozen:
                 cache_hits+=1;frozen.move_to_end(key)
@@ -160,13 +165,15 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 return field+c.evolution.get('latent_weight',.1)*alignment+c.evolution.get('composition_weight',.01)*(composition+physical_composition)
             cached=cache_root/(item['id']+('-amp' if torch.is_autocast_enabled(device.type) else '-fp32')+'.pt')
             with torch.no_grad(),timings.measure('frozen_target',host=True):
-                if jo['target_cache'] and cached.exists():
+                if item['id'] in prepared_zero:
+                    target=(prepared_zero[item['id']]-latent_mean_device)/latent_scale_device;f=torch.tensor([family_index(family)],device=device);p=normalized_parameter(c,torch.tensor([item['parameter']],device=device),f)
+                elif jo['target_cache'] and cached.exists():
                     with timings.measure('target_cache_io',host=True):target=torch.load(cached,map_location='cpu',weights_only=True).to(device)
                     f=torch.tensor([family_index(family)],device=device);p=normalized_parameter(c,torch.tensor([item['parameter']],device=device),f)
                 else:
-                    z,f,p=encode(item);target=(z-mean.to(device))/scale.to(device)
-                    if jo['target_cache'] and (cached.exists() or len(list(cache_root.glob('*.pt')))<o['frozen_cache_items']):
-                        with timings.measure('target_cache_io',host=True):atomic_write(cached,lambda out:torch.save(target.detach().cpu(),out))
+                    z,f,p=encode(item);target=(z-latent_mean_device)/latent_scale_device
+                    if jo['target_cache'] and (cached.exists() or len(targets.disk)<o['frozen_cache_items']):
+                        with timings.measure('target_cache_io',host=True):atomic_write(cached,lambda out:torch.save(target.detach().cpu(),out));targets.disk.add(cached.stem)
                 graph_key=(family,torch.is_autocast_enabled(device.type))
                 if graph_key not in frozen_graphs or o['performance_mode']=='legacy':
                     with timings.measure('graph_compute'):frozen_graphs[graph_key]=ae.graph_encoder(f).detach()
@@ -182,12 +189,25 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             auxiliary=jo['auxiliary']
             if any(auxiliary[k]>0 for k in ('field','observation','pde')):
                 from .consistency import auxiliary_loss
-                estimate=(state+(1-s[:,None,None])*prediction)*scale.to(device)+mean.to(device)
+                estimate=(state+(1-s[:,None,None])*prediction)*latent_scale_device+latent_mean_device
                 loss=loss+auxiliary_loss(ae,c,estimate,s,p,known,f,observations,norms[family],auxiliary,item,g)
             return loss
 
+        prepared_zero={}
         def flow_microbatch(items,iteration):
+            with torch.no_grad(),timings.measure('frozen_target',host=True):
+                def prepare(requests):return state_samples_batch([x for x,_ in requests],[t for _,t in requests],c,norms)
+                def compute(requests,state):
+                    with timings.measure('transfer',host=True):
+                        si=[x for x,_ in requests];sf=torch.tensor([family_index(x['family']) for x in si],device=device);sp=normalized_parameter(c,torch.tensor([x['parameter'] for x in si],device=device),sf);sx=torch.as_tensor(np.stack([x['context'] for x in si]),device=device)
+                        if device.type=='cuda':state=state.pin_memory()
+                        state=state.to(device,non_blocking=device.type=='cuda')
+                    with timings.measure('encoder_compute'):return ae.encode(sx,state,sp,sf)
+                values=targets.resolve([(item,0.) for item in items],torch.is_autocast_enabled(device.type),o['microbatch'],prepare,compute,device)
+                with timings.measure('transfer',host=True):values=values.to(device,non_blocking=device.type=='cuda')
+                prepared_zero.update({item['id']:values[i:i+1] for i,item in enumerate(items)})
             prepared=[one(item,iteration+i,True) for i,item in enumerate(items)]
+            prepared_zero.clear()
             count=max(x[3][0].shape[1] for x in prepared);observations=[]
             for j in range(4):
                 rows=[]
@@ -221,7 +241,7 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             tick=time.perf_counter()
             if stage=='autoencoder' and completed:
                 calibration_started=time.perf_counter();mean,scale=calibrate();record['latent_calibration_seconds']=time.perf_counter()-calibration_started
-            cp={'schema':SCHEMA,'architecture':ARCHITECTURE,'engine_version':3,'joint_schema':schema(c),'stage':stage,'config':c.to_dict(),'config_identity':digest(c.to_dict()),'progress':step,'completed':completed,'autoencoder':ae.state_dict() if stage!='flow' else None,'velocity':model.state_dict() if stage=='flow' else None,'dependency':dep,'dataset_root':os.path.relpath(data.root,root),'dataset_identity':data.metadata['sha256'],'training_ids':[x for x in data.metadata['ids'] if x.startswith('train:')],'normalization':data.metadata['normalization'],'normalizations':norms,'normalization_fitted_ids':data.metadata['fitted_ids'],'latent_mean':mean,'latent_scale':scale,'optimizer':optimizer.state_dict(),'scheduler':{'settings':settings,'completed_updates':step},'scaler':scaler.state_dict(),'rng':g.get_state(),'torch_rng':torch.get_rng_state(),'cuda_rng':torch.cuda.get_rng_state_all() if device.type=='cuda' else [],'source':code_identity(),'scientific_source':scientific_source(),'environment':environment(RuntimeSpec(**c.runtime)),'history':history,'actual_precision':policy,'source_change_override':source_override,'effective_examples_processed':effective_examples,'field_loss':c.field_loss,'conditioning_policy':jo,'target_cache_identity':cache_identity,'training_seconds':time.perf_counter()-started,'training_physics':physics,'capabilities':{'state_schemas':physics['state_schemas'],'families':list(c.family_weights),'family_weights':c.family_weights,'dimension':2,'fields':['u','v (wave only)'],'state':'initial displacement + initial velocity(wave) + typed scalar; no trajectory latent','parameter_ranges':{'diffusivity':c.diffusivity_range,'wave_speed':c.wave_speed_range},'temporal':{'mode':'continuous','interval':list(c.interval)},'unconditional_trained':c.unconditional_probability>0 or c.observation_counts[0]==0,'scientific_accuracy':False}}
+            cp={'schema':SCHEMA,'architecture':ARCHITECTURE,'engine_version':3,'joint_schema':joint_schema,'stage':stage,'config':resolved_config,'config_identity':config_identity,'progress':step,'completed':completed,'autoencoder':ae.state_dict() if stage!='flow' else None,'velocity':model.state_dict() if stage=='flow' else None,'dependency':dep,'dataset_root':os.path.relpath(data.root,root),'dataset_identity':data.metadata['sha256'],'training_ids':[x for x in data.metadata['ids'] if x.startswith('train:')],'normalization':data.metadata['normalization'],'normalizations':norms,'normalization_fitted_ids':data.metadata['fitted_ids'],'latent_mean':mean,'latent_scale':scale,'optimizer':optimizer.state_dict(),'scheduler':{'settings':settings,'completed_updates':step},'scaler':scaler.state_dict(),'rng':g.get_state(),'torch_rng':torch.get_rng_state(),'cuda_rng':torch.cuda.get_rng_state_all() if device.type=='cuda' else [],'source':code_identity(),'scientific_source':source_identity,'environment':environment(RuntimeSpec(**c.runtime)),'history':history,'actual_precision':policy,'source_change_override':source_override,'effective_examples_processed':effective_examples,'field_loss':c.field_loss,'conditioning_policy':jo,'target_cache_identity':cache_identity,'training_seconds':time.perf_counter()-started,'training_physics':physics,'capabilities':{'state_schemas':physics['state_schemas'],'families':list(c.family_weights),'family_weights':c.family_weights,'dimension':2,'fields':['u','v (wave only)'],'state':'initial displacement + initial velocity(wave) + typed scalar; no trajectory latent','parameter_ranges':{'diffusivity':c.diffusivity_range,'wave_speed':c.wave_speed_range},'temporal':{'mode':'continuous','interval':list(c.interval)},'unconditional_trained':c.unconditional_probability>0 or c.observation_counts[0]==0,'scientific_accuracy':False}}
             atomic_write(checkpoint,lambda out:torch.save(cp,out))
             if completed:
                 portable=portable_checkpoint({**cp,'autoencoder':ae.state_dict()}) if stage=='flow' else {k:v for k,v in cp.items() if k not in ('optimizer','scheduler','scaler','rng','torch_rng','cuda_rng')}
@@ -240,7 +260,7 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             since=0
             while step<total:
                 if stop[0] or should_stop and should_stop():break
-                synchronize(device);timings.reset();prior_frozen=(cache_hits,cache_misses);prior_region=(cache.hits,cache.misses);tick=time.perf_counter();optimizer.zero_grad(set_to_none=True);lr=learning_rate(settings,step)
+                synchronize(device);timings.reset();prior_frozen=(cache_hits,cache_misses);prior_region=(cache.hits,cache.misses);prior_preparation=targets.stats.copy();prior_targets=(targets.stats['memory_hits']+targets.stats['disk_hits']+targets.stats['deduplicated_requests'],targets.stats['misses']);tick=time.perf_counter();optimizer.zero_grad(set_to_none=True);lr=learning_rate(settings,step)
                 for group in optimizer.param_groups:group['lr']=lr
                 names=sorted(c.family_weights);weights=torch.tensor([c.family_weights[n] for n in names]);weights/=weights.sum();offset=float(torch.rand((),generator=g));chosen=torch.searchsorted(weights.cumsum(0),(torch.arange(c.batch_size)/c.batch_size+offset)%1).tolist();items=[]
                 # Reject by deterministic family identity, not by constructing
@@ -254,14 +274,19 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 with timings.measure('dataset_initial_reference',host=True):items=[attach(x) for x in data.items(indices,workers=o['workers'])]
                 components={};batch_loss=0.;per_family={};backward=0.
                 model.train();ae.eval() if stage=='flow' else None;ae.encoder.eval() if stage!='autoencoder' else ae.encoder.train()
-                use_batch=stage=='flow' and o['performance_mode']=='optimized' and not any(jo['auxiliary'][k]>0 for k in ('field','observation','pde'))
-                size=o['microbatch'] if use_batch else 1
+                use_batch=o['execution']=='batched' and o['performance_mode']=='optimized' and (stage!='flow' or not any(jo['auxiliary'][k]>0 for k in ('field','observation','pde')))
+                size=o['microbatch'] if use_batch else 1;forward_sizes=[]
                 for start in range(0,len(items),size):
-                    group=items[start:start+size]
-                    with autocast():losses=flow_microbatch(group,step*c.batch_size+start) if use_batch else [one(group[0],step*c.batch_size+start)]
+                    group=items[start:start+size];forward_sizes.append(len(group))
+                    with autocast():
+                        if use_batch and stage!='flow':
+                            planned=batching.plans(c,group,g,step*c.batch_size+start,stage,norms,cache,timings,item_quantity,grouped_queries)
+                            losses=batching.forward(c,ae,planned,stage,norms,device,timings,targets,differentiable_loss,item_quantity,components)
+                        elif use_batch:losses=flow_microbatch(group,step*c.batch_size+start)
+                        else:losses=[one(group[0],step*c.batch_size+start)]
                     for item,loss in zip(group,losses):
                         loss_value=loss.detach().float();batch_loss+=loss_value/c.batch_size;per_family.setdefault(item['family'],[]).append(loss_value)
-                    with timings.measure('backward_compute'):scaler.scale(torch.stack(losses).sum()/c.batch_size).backward()
+                    with timings.measure('backward_compute'):scaler.scale(torch.stack(list(losses)).sum()/c.batch_size).backward()
                 with timings.measure('optimizer_compute'):
                     scaler.unscale_(optimizer);grad=torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad],settings['gradient_clip'],error_if_nonfinite=policy!='fp16')
                     # FP16 overflows are GradScaler's responsibility: skip and
@@ -274,7 +299,9 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 finite=math.isfinite(float(grad));skipped=policy=='fp16' and scaler.get_scale()<old_scale
                 if not finite and not skipped:raise FloatingPointError('Nonfinite gradients without a skipped optimizer update')
                 measured=timings.report()
-                row={'step':step,'training_loss':batch_loss,'family_example_counts':{k:sum(x['family']==k for x in items) for k in names},'per_family_loss':{k:float(torch.stack(v).mean()) for k,v in per_family.items()},'components':scalarize(components),'gradient_norm':float(grad) if finite else None,'gradients_finite':finite,'optimizer_update_skipped':skipped,'scaler_scale':scaler.get_scale(),'learning_rate':lr,'step_seconds':elapsed,'data_seconds':sum((measured or {}).get('host_exclusive_seconds',{}).get(k,0.) for k in ('dataset_initial_reference','reference_evaluation','region_analysis')),'component_timings':measured,'data_seconds_definition':'Sum of exclusive host reference evaluation, region analysis and dataset construction; see nested component scopes for packing/other preprocessing.', 'timing_semantics':'Per-update synchronized wall time, excluding validation/persistence. Nested component scopes explicitly labelled. No cumulative counter is a step cost.','elapsed_seconds':time.perf_counter()-started,'effective_examples':effective_examples,'frozen_cache':{'hits_cumulative':cache_hits,'misses_cumulative':cache_misses,'hits_this_step':cache_hits-prior_frozen[0],'misses_this_step':cache_misses-prior_frozen[1],'items':len(frozen),'bytes':sum(x.numel()*x.element_size() for values in frozen.values() for x in values)},'region_cache':{'hits_cumulative':cache.hits,'misses_cumulative':cache.misses,'hits_this_step':cache.hits-prior_region[0],'misses_this_step':cache.misses-prior_region[1]},'microbatch_semantics':'B default CFM uses actual configured microbatches; A1/A2 and optional decoded B auxiliaries use exact per-realization accumulation within the same effective batch' , 'actual_forward_microbatch':size}
+                frozen_report=targets.report()
+                cache_report=({'hits_cumulative':frozen_report['memory_hits']+frozen_report['disk_hits']+frozen_report['deduplicated_requests'],'misses_cumulative':frozen_report['misses'],'hits_this_step':frozen_report['memory_hits']+frozen_report['disk_hits']+frozen_report['deduplicated_requests']-prior_targets[0],'misses_this_step':frozen_report['misses']-prior_targets[1],'items':frozen_report['items'],'bytes':frozen_report['bytes']} if use_batch else {'hits_cumulative':cache_hits,'misses_cumulative':cache_misses,'hits_this_step':cache_hits-prior_frozen[0],'misses_this_step':cache_misses-prior_frozen[1],'items':len(frozen),'bytes':sum(x.numel()*x.element_size() for values in frozen.values() for x in values)})
+                row={'step':step,'training_loss':batch_loss,'family_example_counts':{k:sum(x['family']==k for x in items) for k in names},'per_family_loss':{k:float(torch.stack(v).mean()) for k,v in per_family.items()},'components':scalarize(components),'gradient_norm':float(grad) if finite else None,'gradients_finite':finite,'optimizer_update_skipped':skipped,'scaler_scale':scaler.get_scale(),'learning_rate':lr,'step_seconds':elapsed,'data_seconds':sum((measured or {}).get('host_exclusive_seconds',{}).get(k,0.) for k in ('dataset_initial_reference','reference_evaluation','region_analysis')),'component_timings':measured,'data_seconds_definition':'Sum of exclusive host reference evaluation, region analysis and dataset construction; see nested component scopes for packing/other preprocessing. Prefetched CPU reference work is separately recorded in frozen_preparation_step; it can overlap compute and is not added here.', 'timing_semantics':'Per-update synchronized wall time, excluding validation/persistence. Nested component scopes explicitly labelled. No cumulative counter is a step cost.','elapsed_seconds':time.perf_counter()-started,'effective_examples':effective_examples,'frozen_cache':cache_report,'region_cache':{'hits_cumulative':cache.hits,'misses_cumulative':cache.misses,'hits_this_step':cache.hits-prior_region[0],'misses_this_step':cache.misses-prior_region[1]},'frozen_preparation':frozen_report,'frozen_preparation_step':{k:v-prior_preparation.get(k,0) for k,v in targets.stats.items() if k!='maximum_encoding_batch'},'microbatch_semantics':'A1/A2/default B use actual mixed-family neural microbatches; losses sum per example / effective batch. Explicit accumulated control and optional B auxiliaries remain serial.','actual_forward_microbatch':max(forward_sizes),'forward_microbatch_sizes':forward_sizes}
                 if step%o['validation_every']==0 or step==total:
                     ae.eval();model.eval();state=g.get_state();val={};vt=time.perf_counter()
                     with torch.enable_grad() if jo['auxiliary']['pde']>0 else torch.no_grad():
@@ -292,5 +319,6 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
         except BaseException as error:
             record.update(state='interrupted' if isinstance(error,KeyboardInterrupt) else 'failed',error=str(error));write_json(root/'run.json',record);raise
         finally:
+            targets.close()
             if previous is not None:signal.signal(signal.SIGINT,previous)
         return record

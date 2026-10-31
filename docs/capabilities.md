@@ -330,3 +330,4 @@ Details/evidence: field-reconstruction-losses.md, field-loss-verification.md.
 | Capability | Status | Implementation | Evidence | Limits |
 |---|---|---|---|---|
 | Performance recovery | Implemented and bounded CPU/MPS execution verified | Native precision selection policy, bounded batched spectral references, exact-key frozen caches, actual default-B microbatches, reconciled step/nested timing | docs/training-performance.md; outputs/performance-20261031/ | Actual T4/CUDA/Colab speed and FP16 execution still require the supplied same-config benchmark; no accuracy claim |
+| Actual A1/A2/B neural batching | CPU loss/full-gradient and MPS execution verified | Mixed-family batches, per-realization/quantity weighting, bounded exact-time frozen prefetch/cache and separate preparation clocks | docs/batched-training.md; outputs/batching-20261031/ | Medium/T4/CUDA FP16 speed, fit and accuracy remain unverified; optional B auxiliaries retain serial execution |

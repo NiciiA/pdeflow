@@ -11,9 +11,11 @@ def options(c):
          'workers':0,'pin_memory':True,'validation_every':c.checkpoint_every,'validation_subset':min(c.validation_count,8),
          'broad_every':max(c.checkpoint_every,5000),'broad_subset':min(c.validation_count,24),
          'calibration_count':min(c.train_count,128),'keep_periodic':2,'observation_locations':'grid',
-         'autoencoder':{},'evolution':{},'flow':{},'allow_source_change':False,'compile':False,'profile_components':False,'performance_mode':'optimized','reference_cache_items':32,'frozen_cache_items':128}
+         'autoencoder':{},'evolution':{},'flow':{},'allow_source_change':False,'compile':False,'profile_components':False,'performance_mode':'optimized','reference_cache_items':32,'frozen_cache_items':128,'execution':'batched','frozen_prefetch':1}
     if set(c.training_options)-out.keys():raise ValueError('Unknown training options: '+', '.join(sorted(set(c.training_options)-out.keys())))
     out.update(c.training_options)
+    if out['execution'] not in ('batched','accumulated'):raise ValueError('Execution: batched or accumulated')
+    if type(out['frozen_prefetch'])!=int or out['frozen_prefetch'] not in (0,1):raise ValueError('Frozen prefetch must be0 or1 next chunks')
     if out['performance_mode'] not in ('optimized','legacy'):raise ValueError('Performance mode: optimized or legacy (comparison only)')
     for key in ('reference_cache_items','frozen_cache_items'):
         if type(out[key])!=int or not 1<=out[key]<=256:raise ValueError(key+' must be 1..256')
@@ -62,7 +64,7 @@ def learning_rate(settings,completed):
 
 def scientific_source():
     base=Path(__file__).parents[1]
-    names=['coordinate/contracts.py','coordinate/graph.py','coordinate/physics.py','numerics/dynamic.py','coordinate/model.py','coordinate/joint.py','coordinate/consistency.py','coordinate/profiling.py','coordinate/training.py','coordinate/engine.py','coordinate/dataset.py','coordinate/optimization.py','coordinate/temporal.py','heat_continuous.py','heat_placement.py','field_losses.py','numerics/__init__.py','core/__init__.py','equations/__init__.py']
+    names=['coordinate/contracts.py','coordinate/graph.py','coordinate/physics.py','numerics/dynamic.py','coordinate/model.py','coordinate/joint.py','coordinate/consistency.py','coordinate/profiling.py','coordinate/training.py','coordinate/engine.py','coordinate/frozen.py','coordinate/batching.py','coordinate/dataset.py','coordinate/optimization.py','coordinate/temporal.py','heat_continuous.py','heat_placement.py','field_losses.py','numerics/__init__.py','core/__init__.py','equations/__init__.py']
     files={n:hashlib.sha256((base/n).read_bytes()).hexdigest() for n in names}
     return {'files':files,'sha256':digest(files),'policy':'Scientific model/data/loss/numerical source, excluding notebook, docs and unrelated UI'}
 

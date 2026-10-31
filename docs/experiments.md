@@ -467,3 +467,18 @@ parameter differences <=1.59e-6 and loss/gradient-norm differences <=2.38e-7.
 Region-balanced alpha=.5 remains experimental. No model-quality improvement,
 new optimum, or gate pass is inferred. See docs/training-performance.md for exact
 workload, update/all-in timing differences, source hashes and T4 rerun procedure.
+
+## Actual representation-batch sweep —31 October2026
+
+outputs/batching-20261031/ records strict CPU gradient/loss comparisons and a
+smoke-capacity FP32 cold/replay-warm sweep at effective batch32, actual8/16/32
+microbatches, and an accumulated1 control. All variants keep architecture, points,
+objective, distributions and frozen dependencies fixed. Seven updates/trial,
+warmup2/measured5; common2-update random anchors are pipeline fixtures only.
+Cold median end-to-end A1/A2/B seconds: accumulated .1545/.5611/.1434;
+batched8 .0569/.0922/.0434; batched16 .0511/.0713/.0387;
+batched32 .0448/.0586/.0364. Warm is a replay with valid initial-target cache files,
+not a full continuous-time/dataset cache. Full raw data, setup/IO/cache/host-memory
+and variability are retained. Actual MPS A1/A2/B passed; actual Medium/T4 sweep
+remains unexecuted here. No scientific quality improvement or optimal batch is
+inferred. docs/batched-training.md includes exact Colab source reload and commands.

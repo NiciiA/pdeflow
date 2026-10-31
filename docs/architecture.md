@@ -531,3 +531,15 @@ are explicitly unsupported. The broader1D–3D chemistry/steering specification 
 preserved, with this bounded2D dynamic slice operational. Exact contracts, counts,
 normalization, topology and limitations: operator-wave-model.md. Evidence:
 operator-wave-verification.md. Old numerical/source/history remains attributable.
+
+### Batched operator training and preparation
+
+coordinate/batching.py defines per-realization physical-time/query plans and real
+A1/A2 neural batches, with wave-only velocity decoding and per-example reductions.
+coordinate/frozen.py resolves immutable exact-time encoder requests with bounded
+memory/disk caches and one next CPU-reference prefetch; accelerator model calls
+remain on the trainer thread. The large identity, source/config and dependency
+hashes are setup metadata. Measurements distinguish per-step lookup/reference/
+encoding/serialization/IO and cumulative counters. The accumulated execution path
+is retained as a numerical control. See docs/batched-training.md; this accelerates
+the existing scalar2D heat/wave slice without reducing the modular1D–3D roadmap.
