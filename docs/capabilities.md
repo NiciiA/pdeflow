@@ -324,3 +324,9 @@ smokes, exact CPU resume, shared notebook execution and rendered metric/overlay
 comparison are verified. CUDA AMP/actual Colab and scientific accuracy gains are
 unverified. Other PDEs/3D region losses and decoded auxiliary flow losses are absent.
 Details/evidence: field-reconstruction-losses.md, field-loss-verification.md.
+
+### Training performance recovery — 31 October 2026
+
+| Capability | Status | Implementation | Evidence | Limits |
+|---|---|---|---|---|
+| Performance recovery | Implemented and bounded CPU/MPS execution verified | Native precision selection policy, bounded batched spectral references, exact-key frozen caches, actual default-B microbatches, reconciled step/nested timing | docs/training-performance.md; outputs/performance-20261031/ | Actual T4/CUDA/Colab speed and FP16 execution still require the supplied same-config benchmark; no accuracy claim |

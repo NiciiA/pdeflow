@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from pdeflow.runtime import read_json,write_json,atomic_write,file_digest,digest,environment,RuntimeSpec
 from pdeflow.coordinate.contracts import CoordinateConfig
-from pdeflow.coordinate.optimization import options,precision,scientific_source,model_contract
+from pdeflow.coordinate.optimization import options,precision,scientific_source,model_contract,cuda_precision_support
 
 
 def preset(name='large',device='cuda',precision_policy='auto',overrides=None):
@@ -51,7 +51,7 @@ def hardware(device='cuda',disk_root=None):
     else:available=None
     gpu=None
     if torch.cuda.is_available():
-        p=torch.cuda.get_device_properties(0);free,total=torch.cuda.mem_get_info();gpu={'name':p.name,'total_bytes':total,'free_bytes':free,'bf16':torch.cuda.is_bf16_supported(),'fp16':True,'capability':list(torch.cuda.get_device_capability())}
+        p=torch.cuda.get_device_properties(0);free,total=torch.cuda.mem_get_info();gpu={'name':p.name,'total_bytes':total,'free_bytes':free,'bf16':cuda_precision_support()['bf16_native'],**cuda_precision_support(),'capability':list(torch.cuda.get_device_capability())}
     return {'python':sys.version,'platform':platform.platform(),'torch':torch.__version__,'cuda_runtime':torch.version.cuda,'numpy':np.__version__,
             'gpu':gpu,'host_ram_bytes':ram,'available_host_ram_bytes':available,'local_disk_free_bytes':shutil.disk_usage(disk_root or Path.cwd()).free,'selected_device':device}
 
@@ -78,7 +78,7 @@ def summary(c):
       'config':c.to_dict(),'training_examples':c.train_count,'validation_examples':c.validation_count,'untouched_test_examples':c.test_count,
       'reference_shape':list(c.reference_shape),'temporal_mode':c.temporal_mode,'time_interval':list(c.interval),'animation_frames':c.animation_frames,'legacy_snapshot_times':list(c.times) if c.temporal_mode!='continuous' else None,'effective_batch':c.batch_size,'microbatch':o['microbatch'],'accumulation':o['accumulation'],
       'updates':{'representation':c.ae_steps,'evolution':c.evolution_steps,'flow':c.flow_steps},'hypothetical_materialized_float32_bytes':bytes_example*(c.train_count+c.validation_count+c.test_count),
-      'bounded_reference_cache_bytes':8*(nodes*52+c.encoder_points*16) if c.temporal_mode=='continuous' else bytes_example*8,'cache_estimate_definition':'Eight initial grids, Fourier coefficients/waves and fixed encoder sets; current batches/temporary Fourier chunks additional' if c.temporal_mode=='continuous' else 'Eight full legacy examples','maximum_latent_cache_bytes':4*(c.train_count+c.validation_count)*c.tokens*c.width,'estimated_weight_bytes':4*counts['total_training'],'rough_adam_weights_moments_bytes':12*counts['total_training'],
+      'bounded_reference_cache_bytes':o['reference_cache_items']*(nodes*52+c.encoder_points*16) if c.temporal_mode=='continuous' else bytes_example*8,'cache_estimate_definition':'Bounded reference_cache_items initial grids/spectral state/context sets; coefficient/frame LRUs and current batch/temporary chunks additional' if c.temporal_mode=='continuous' else 'Eight full legacy examples','maximum_latent_cache_bytes':4*o['frozen_cache_items']*c.tokens*c.width,'latent_cache_scope':'CPU frozen encoder LRU plus separately bounded local disk target cache; two such bounds, metadata overhead additional. Recomputable caches excluded from persistent snapshots.','estimated_weight_bytes':4*counts['total_training'],'rough_adam_weights_moments_bytes':12*counts['total_training'],
       'estimates':'Parameter/storage arithmetic only; activations, attention, AMP workspaces and allocator overhead need actual profiling. No fit or speed guarantee.'}
 
 
@@ -97,7 +97,9 @@ def gallery(c,output):
     write_json(Path(output).with_suffix('.json'),{'records':records,'meaning':'Same deterministic underlying field at native / twice-finer FFT reference. Discretization discrepancy, not learned error; inspect before substantial training.'});return records
 
 
-def profile(c,local_root,allow_cpu_check=False,updates=3):
+def profile(c,local_root,allow_cpu_check=False,updates=10,warmup=2):
+    if updates<warmup+5 or warmup<1:raise ValueError('Profile requires >=1 warmup and >=5 measured updates')
+    from pdeflow.coordinate.profiling import distribution
     guard(c,allow_cpu_check);requested=digest(c.to_dict());o=options(c);report={'requested_config':requested,'hardware':hardware(c.runtime['device']),'success':False}
     from pdeflow.coordinate.training import train
     from pdeflow.coordinate.validation import representation,flow as validate_flow
@@ -105,14 +107,16 @@ def profile(c,local_root,allow_cpu_check=False,updates=3):
     try:
         with torch.random.fork_rng(devices=devices),tempfile.TemporaryDirectory(prefix='pdeflow-profile-',dir=local_root) as temporary:
             p=Path(temporary);pc=replace(c,ae_steps=updates,evolution_steps=updates,flow_steps=max(2,updates),checkpoint_every=updates,
-              training_options={**c.training_options,'calibration_count':min(8,c.train_count),'validation_every':updates,'validation_subset':min(2,c.validation_count),'broad_every':999999,'profile_components':True})
+              training_options={**c.training_options,'validation_every':updates,'profile_components':True})
             records={}
             for stage in ('autoencoder','evolution','flow'):
                 stage_root=p/stage
                 r=train(pc.to_dict(),stage_root,stage,p/'evolution/evolution.pt' if stage=='flow' else p/'autoencoder/autoencoder.pt' if stage=='evolution' else None)
-                rows=read_json(stage_root/'history.json');measured=rows[1:] or rows;seconds=float(np.median([v['step_seconds'] for v in measured]));records[stage]={'step_seconds':seconds,
+                rows=read_json(stage_root/'history.json');measured=rows[warmup:];seconds=float(np.median([v['step_seconds'] for v in measured]));records[stage]={'step_seconds':seconds,
+                    'update_wall_seconds':distribution([v['step_seconds'] for v in measured]),'end_to_end_update_seconds':distribution([v['end_to_end_seconds'] for v in measured]),'examples_per_second':pc.batch_size/seconds,'warmup_rows':rows[:warmup],
+                    'setup_seconds':r['setup_seconds'],'final_persistence_and_calibration_seconds':r['final_persistence_and_calibration_seconds'],'latent_calibration_seconds':r.get('latent_calibration_seconds',0.),'cache_bytes':sum(f.stat().st_size for f in stage_root.rglob('*') if f.is_file() and 'latent-targets' in f.parts),'frozen_cache':rows[-1]['frozen_cache'],'cache_population_and_io_seconds':sum(sum((v.get('component_timings') or {}).get('host_exclusive_seconds',{}).get(k,0.) for k in ('frozen_cache_store','target_cache_io')) for v in rows),'skipped_updates':sum(v['optimizer_update_skipped'] for v in rows),
                     'data_seconds':float(np.mean([v['data_seconds'] for v in rows])),'validation_seconds':sum(v.get('validation_seconds',0) for v in rows),'component_timings_after_warmup':[v.get('component_timings') for v in measured],'memory':r.get('memory',{'note':'Device peak allocation unavailable for this backend'}),'checkpoint_bytes':sum(f.stat().st_size for f in stage_root.glob('*.pt')),
-                    'rough_training_seconds':seconds*(getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[stage])),'cost_scope':'Warmup first optimizer step excluded from median; validation/checkpoint/sync costs reported separately, not in duration estimate'}
+                    'rough_training_seconds':seconds*(getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[stage])),'cost_scope':'Warmup excluded from update distribution. End-to-end updates include scheduled validation/persistence. Setup and final calibration/export separate. Duration estimate excludes these costs; not a deadline guarantee.'}
             t=time.perf_counter();representation(p/'autoencoder/autoencoder.pt',p/'representation-validation.json',c.runtime['device'],subset=min(2,c.validation_count));report['physical_validation_seconds']=time.perf_counter()-t
             t=time.perf_counter();validate_flow(p/'flow/coordinate.pt',p/'flow-validation.json',c.runtime['device'],subset=1,counts=[max(1,c.observation_counts[0])],noises=[0.],particles=1,steps=2,resolution=16)
             report['flow_reconstruction_validation_seconds']=time.perf_counter()-t
@@ -122,7 +126,7 @@ def profile(c,local_root,allow_cpu_check=False,updates=3):
         if torch.cuda.is_available():torch.cuda.empty_cache()
         micro=max(1,o['microbatch']//2);report.update(error='Out of memory profiling '+stage,suggestion={'microbatch':micro,'accumulation':int(np.ceil(c.batch_size/micro)),'activation_checkpointing':True},
            meaning='No capacity/grid/budget reduction applied. Explicitly apply this proposal and profile again; effective batch remains unchanged.')
-    report['warning']='Disposable training, same requested architecture, points and microbatch. Reduced profiling update/calibration/validation counts are recorded; not model training or a guarantee of full-run fit.'
+    report['warning']='Disposable training, same requested architecture, points and microbatch. Only probe update budget and checkpoint/validation frequency change; calibration, architecture, points and scientific objective stay requested. Not an accuracy run or a full-run fit guarantee.'
     return report
 
 
@@ -141,8 +145,8 @@ class Session:
         if not 1<=sync_seconds<=86400 or type(keep_snapshots)!=int or not 1<=keep_snapshots<=20:raise ValueError('Sync seconds must be 1–86400; retain 1–20 persistent snapshots')
         self.sync_seconds=sync_seconds;self.keep_snapshots=keep_snapshots
     def inspect(self):return {'hardware':hardware(self.c.runtime['device'],self.root),'configuration':summary(self.c),'persistent':str(self.persistent)}
-    def preflight(self):
-        result=profile(self.c,self.root.parent,self.allow_cpu_check);write_json(self.root/'profile.json',result);return result
+    def preflight(self,updates=10,warmup=2):
+        result=profile(self.c,self.root.parent,self.allow_cpu_check,updates,warmup);write_json(self.root/'profile.json',result);return result
     def sync(self,force=False):
         from .persistence import publish
         if force or time.time()-self.last_sync>=self.sync_seconds:

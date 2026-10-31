@@ -800,3 +800,18 @@ apply to decoded normalized physical quantities in A1 and A2, before active-quan
 averaging. A2 additionally retains0.1 latent alignment and0.01 latent/decoded composition
 weights by default; B's masked equal-group CFM velocity loss is unchanged. The routing
 audit's controlled alpha0/.5 check changes real encoder/decoder optimizer updates.
+
+## Reference acceleration without a new scientific objective
+
+Generated operator-state examples already have |kx|,|ky| <= recipe.max_wave.
+Their optimized spectral evaluator omits only out-of-band roundoff after verifying
+sum(|discarded u_hat| + |discarded v_hat|) <= 1e-12 max(1, ||u0||inf, ||v0||inf).
+Unrestricted reference imports keep all modes, with symmetric Nyquist splitting.
+The coefficient evolution is unchanged: heat u_k(t)=u_k(0)exp(-D|k|²t);
+wave u_k(t)=u_k(0)cos(c|k|t)+v_k(0)t sinc(c|k|t/pi), and
+v_k(t)=-c|k|u_k(0)sin(c|k|t)+v_k(0)cos(c|k|t).
+Thus k=0 displacement remains linear in time. Vectorization and exact-key bounded
+memoization introduce no temporal quantization. Region queries/masks, alpha=.5
+blend and per-solution/per-time/per-quantity reductions remain unchanged. B true
+microbatch losses are summed and divided by the same effective batch, preserving
+the original CFM objective up to numerical batching/reduction roundoff.

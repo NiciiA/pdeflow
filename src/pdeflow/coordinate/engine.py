@@ -1,6 +1,8 @@
 """Shared A1/A2/B implementation. Real references are targets, never inference context."""
 from pathlib import Path
 from contextlib import nullcontext
+from collections import OrderedDict
+from .profiling import Timings,host_peak_bytes
 import os,time,signal,threading,math
 import numpy as np
 import torch
@@ -9,7 +11,7 @@ from pdeflow.local import run_lock,now
 from .contracts import CoordinateConfig
 from .joint import ARCHITECTURE,schema,layout,options as joint_options,path as flow_path,flow_loss,active_mask
 from .optimization import options,precision,learning_rate,scientific_source,model_contract,resume_contract,representation_contract
-from .dataset import Dataset,state_samples,item_quantity
+from .dataset import Dataset,state_samples,state_samples_batch,item_quantity,family_for
 from .model import Autoencoder,Velocity
 from .training import normalized_parameter,read_checkpoint,portable_checkpoint,SCHEMA
 from .physics import family_index
@@ -38,12 +40,17 @@ def observation_batch(c,items,g,norms,device):
                 clean=torch.tensor(item['solver'].evaluate(q[indices].numpy(),item['parameter'],c.interval,name),dtype=torch.float32);noisy=clean+sigma*torch.randn(len(clean),generator=g)
                 f[indices,0]=(noisy-ns[j]['mean'])/ns[j]['scale'];f[indices,1]=sigma/ns[j]['scale'];f[indices,2]=1
         rows.append((q,f,quantities));ids.append(n)
-    count=max(1,max(ids));points=torch.zeros(len(items),count,3,device=device);features=torch.zeros_like(points);valid=torch.zeros(len(items),count,dtype=torch.bool,device=device);quantity=torch.zeros_like(valid,dtype=torch.long)
-    for b,(q,f,k) in enumerate(rows):n=len(q);points[b,:n]=q.to(device);features[b,:n]=f.to(device);valid[b,:n]=True;quantity[b,:n]=k.to(device)
-    return points,features,valid,quantity
+    count=max(1,max(ids));points=torch.zeros(len(items),count,3);features=torch.zeros_like(points);valid=torch.zeros(len(items),count,dtype=torch.bool);quantity=torch.zeros_like(valid,dtype=torch.long)
+    for b,(q,f,k) in enumerate(rows):n=len(q);points[b,:n]=q;features[b,:n]=f;valid[b,:n]=True;quantity[b,:n]=k
+    profiler=items[0]['solver'].profiler if items else None
+    with profiler.measure('transfer',host=True) if profiler else nullcontext():
+        values=(points,features,valid,quantity)
+        if device.type=='cuda':values=tuple(x.pin_memory() for x in values)
+        return tuple(x.to(device,non_blocking=device.type=='cuda') for x in values)
 
 
 def train(config,output,stage,dependency=None,resume=False,stop_after=None,should_stop=None,event=None,extend=False):
+    setup_started=time.perf_counter()
     c=CoordinateConfig(**config).validate();o=options(c);jo=joint_options(c)
     if stage not in ('autoencoder','evolution','flow'):raise ValueError('Stages: autoencoder(A1), evolution(A2), flow(B)')
     from .physics import training_spec
@@ -82,61 +89,96 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
         record={'kind':'coordinate_stage_run','id':root.name,'schema_version':2,'architecture':ARCHITECTURE,'stage':stage,'training_physics':physics,'specialist':'heat+wave' if len(c.family_weights)>1 else next(iter(c.family_weights)),'config':c.to_dict(),'source':code_identity(),'scientific_source':scientific_source(),'config_identity':digest(c.to_dict()),'state':'preparing','progress':step,'budget':total,'pid':os.getpid(),'created_at':now(),'export':str(root/('autoencoder.pt' if stage=='autoencoder' else 'evolution.pt' if stage=='evolution' else 'coordinate.pt')),'dependency':dep}
         write_json(root/'run.json',record);write_json(root/'config.json',c.to_dict());cache=AnalysisCache();started=time.perf_counter();stop=[False];previous=None
         if threading.current_thread() is threading.main_thread():previous=signal.signal(signal.SIGINT,lambda *_:stop.__setitem__(0,True))
-        components={};reference_seconds=0.;region_seconds=0.;encoder_seconds=0.;decoder_seconds=0.
-        cache_identity={'data':data.metadata['sha256'],'dependency':dep,'sampling':c.encoder_points,'normalizations':norms,'latent_mean':mean.tolist() if mean is not None else None,'latent_scale':scale.tolist() if scale is not None else None,'schema':schema(c)};cache_root=root/'latent-targets'/digest(cache_identity)
+        components={};timings=Timings(device,o['profile_components']);cache.profiler=timings;frozen=OrderedDict();cache_hits=0;cache_misses=0;frozen_graphs={}
+        if device.type=='cuda':torch.cuda.reset_peak_memory_stats(device)
+        cache_identity={'data':data.metadata['sha256'],'dependency':dep,'sampling':c.encoder_points,'normalizations':norms,'latent_mean':mean.tolist() if mean is not None else None,'latent_scale':scale.tolist() if scale is not None else None,'schema':schema(c),'scientific_source':scientific_source()['sha256'],'precision':policy,'sampling_identity':{'seed':c.seed,'context':'fixed deterministic example.context; physical t=0 for disk targets'},'version':2};cache_root=root/'latent-targets'/digest(cache_identity)
         if stage=='flow' and jo['target_cache']:cache_root.mkdir(parents=True,exist_ok=True);write_json(cache_root/'identity.json',cache_identity)
 
+        def attach(item):
+            item['solver'].profiler=timings
+            return item
+
         def encode(item,t=0.,complete=True):
-            nonlocal encoder_seconds,reference_seconds
-            tick=time.perf_counter();f=torch.tensor([family_index(item['family'])],device=device);xy=torch.tensor(item['context'],device=device)[None];state=state_samples(item,item['context'],t,c,norms[item['family']]).to(device)[None];reference_seconds+=time.perf_counter()-tick;tick=time.perf_counter();p=normalized_parameter(c,torch.tensor([item['parameter']],device=device),f)
-            z=ae.encode(xy,state,p,f) if complete else ae.encode_state(xy,state,f)
-            encoder_seconds+=time.perf_counter()-tick;return z,f,p
+            nonlocal cache_hits,cache_misses
+            attach(item)
+            # Frozen only; include exact continuous time, representation/data/
+            # normalization/coordinate identity, precision/autocast and mode.
+            key=(digest(cache_identity),item['id'],float(t),complete,torch.is_autocast_enabled(device.type))
+            use_cache=stage!='autoencoder' and o['performance_mode']=='optimized'
+            if use_cache and key in frozen:
+                cache_hits+=1;frozen.move_to_end(key)
+                with timings.measure('transfer',host=True):return tuple(x.to(device,non_blocking=device.type=='cuda' and o['pin_memory']) for x in frozen[key])
+            cache_misses+=1
+            with timings.measure('encoder_reference',host=True):state=state_samples(item,item['context'],t,c,norms[item['family']])
+            with timings.measure('transfer',host=True):
+                f=torch.tensor([family_index(item['family'])],device=device);xy=torch.as_tensor(item['context'],device=device)[None]
+                if device.type=='cuda' and o['pin_memory']:state=state.pin_memory()
+                state=state.to(device,non_blocking=device.type=='cuda' and o['pin_memory'])[None];p=normalized_parameter(c,torch.tensor([item['parameter']],device=device),f)
+            with timings.measure('encoder_compute'):
+                z=ae.encode(xy,state,p,f) if complete else ae.encode_state(xy,state,f)
+            if use_cache:
+                with timings.measure('frozen_cache_store',host=True):frozen[key]=tuple(x.detach().cpu() for x in (z,f,p))
+                if len(frozen)>o['frozen_cache_items']:frozen.popitem(last=False)
+            return z,f,p
 
         def fields(item,z,f,p,times,evolved=False,start_time=0.):
-            nonlocal region_seconds,decoder_seconds
             losses=[];kinds=2 if item['family']=='wave' else 1
+            # One supervised physical time per solution in this state trainer.
+            # Evolve once, shared by u/v decoders; never once per quantity/query.
+            with timings.measure('evolution_compute'):
+                state=ae.evolve(z,start_time,float(np.float32(times[0])),p,torch.ones(1,dtype=torch.bool,device=device),f) if evolved else z
             for j in range(kinds):
-                tick=time.perf_counter();view=item_quantity(item,('u','v')[j]);n=norms[item['family']][j]
-                q,target,weights,stats=grouped_queries(c,[view],g,n,cache,physical_times=times);region_seconds+=time.perf_counter()-tick;q=q[0].to(device);target=(target.to(device)-n['mean'])/n['scale'];weights=weights.to(device)
-                tick=time.perf_counter()
-                if evolved:
-                    out=[];positions=[]
-                    for t in torch.unique(q[:,-1],sorted=True):
-                        ix=torch.where(q[:,-1].eq(t))[0];zt=ae.evolve(z,start_time,t,p,torch.ones(1,dtype=torch.bool,device=device),f);out.append(ae.decode_state(zt,q[ix,:2],j,f));positions.append(ix)
-                    pred=torch.cat(out,1)[:,torch.argsort(torch.cat(positions))]
-                else:pred=ae.decode_state(z,q[:,:2],j,f)
-                decoder_seconds+=time.perf_counter()-tick;losses.append(differentiable_loss(pred,target,weights,loss_settings(c.field_loss).type));components[item['family']+'_'+('u','v')[j]]=float(losses[-1].detach())
+                view=item_quantity(item,('u','v')[j]);n=norms[item['family']][j]
+                with timings.measure('region_supervision',host=True):q,target,weights,stats=grouped_queries(c,[view],g,n,cache,physical_times=times)
+                if not torch.isfinite(weights).all() or (weights<0).any():raise ValueError('Invalid field supervision weights')
+                with timings.measure('transfer',host=True):
+                    q=q[0].to(device,non_blocking=device.type=='cuda');target=(target.to(device,non_blocking=device.type=='cuda')-n['mean'])/n['scale'];weights=weights.to(device,non_blocking=device.type=='cuda')
+                with timings.measure('decoder_compute'):
+                    pred=ae.decode_state(state,q[:,:2],j,f)
+                    losses.append(differentiable_loss(pred,target,weights,loss_settings(c.field_loss).type,validate=False))
+                components[item['family']+'_'+('u','v')[j]]=losses[-1].detach()
             return torch.stack(losses).mean()
 
-        def one(item,iteration):
+        def one(item,iteration,defer=False):
             family=item['family']
             from .temporal import state_time
             phase=state_time(c,iteration,g,'query')
             if stage=='autoencoder':
                 t=state_time(c,iteration,g,'encoder')
-                z,f,p=encode(item,t);field=fields(item,z,f,p,[t]);scalar=(ae.decode_parameter(z,families=f)-p).square().mean();components['scalar']=float(scalar.detach())
+                z,f,p=encode(item,t);field=fields(item,z,f,p,[t]);scalar=(ae.decode_parameter(z,families=f)-p).square().mean();components['scalar']=scalar.detach()
                 return field+.1*scalar+jo['latent_regularization']*z.square().mean()
             if stage=='evolution':
                 tb=phase;ta=float(torch.rand((),generator=g))*tb if iteration%2 else 0.;tm=(ta+tb)/2
                 with torch.no_grad():za,f,p=encode(item,ta);zt,_,_=encode(item,tb);z0,_,_=encode(item,0.)
-                evolved=ae.evolve(za,ta,tb,p,torch.ones(1,dtype=torch.bool,device=device),f);field=fields(item,za,f,p,[tb],True,ta)
+                with timings.measure('evolution_compute'):evolved=ae.evolve(za,ta,tb,p,torch.ones(1,dtype=torch.bool,device=device),f)
+                field=fields(item,za,f,p,[tb],True,ta)
                 mask=active_mask(c,torch.ones(1,dtype=torch.bool,device=device),f)[...,None];alignment=((evolved-zt).square()*mask).sum()/mask.expand_as(zt).sum()
-                via=ae.evolve(ae.evolve(z0,0.,tm,p,torch.ones(1,dtype=torch.bool,device=device),f),tm,tb,p,torch.ones(1,dtype=torch.bool,device=device),f);direct=ae.evolve(z0,0.,tb,p,torch.ones(1,dtype=torch.bool,device=device),f);composition=((via-direct).square()*mask).sum()/mask.expand_as(via).sum()
+                with timings.measure('composition_compute'):via=ae.evolve(ae.evolve(z0,0.,tm,p,torch.ones(1,dtype=torch.bool,device=device),f),tm,tb,p,torch.ones(1,dtype=torch.bool,device=device),f);direct=ae.evolve(z0,0.,tb,p,torch.ones(1,dtype=torch.bool,device=device),f);composition=((via-direct).square()*mask).sum()/mask.expand_as(via).sum()
                 xy=torch.tensor(item['context'][:min(32,c.encoder_points)],device=device)
-                physical_composition=torch.stack([(ae.decode_state(via,xy,j,f)-ae.decode_state(direct,xy,j,f)).square().mean() for j in range(2 if family=='wave' else 1)]).mean()
-                components.update(latent_alignment=float(alignment.detach()),composition=float(composition.detach()),decoded_composition=float(physical_composition.detach()))
+                with timings.measure('composition_decode_compute'):physical_composition=torch.stack([(ae.decode_state(via,xy,j,f)-ae.decode_state(direct,xy,j,f)).square().mean() for j in range(2 if family=='wave' else 1)]).mean()
+                components.update(latent_alignment=alignment.detach(),composition=composition.detach(),decoded_composition=physical_composition.detach())
                 return field+c.evolution.get('latent_weight',.1)*alignment+c.evolution.get('composition_weight',.01)*(composition+physical_composition)
-            cached=cache_root/(item['id']+'.pt')
-            with torch.no_grad():
-                if jo['target_cache'] and cached.exists():target=torch.load(cached,map_location='cpu',weights_only=True).to(device);f=torch.tensor([family_index(family)],device=device);p=normalized_parameter(c,torch.tensor([item['parameter']],device=device),f)
+            cached=cache_root/(item['id']+('-amp' if torch.is_autocast_enabled(device.type) else '-fp32')+'.pt')
+            with torch.no_grad(),timings.measure('frozen_target',host=True):
+                if jo['target_cache'] and cached.exists():
+                    with timings.measure('target_cache_io',host=True):target=torch.load(cached,map_location='cpu',weights_only=True).to(device)
+                    f=torch.tensor([family_index(family)],device=device);p=normalized_parameter(c,torch.tensor([item['parameter']],device=device),f)
                 else:
                     z,f,p=encode(item);target=(z-mean.to(device))/scale.to(device)
-                    if jo['target_cache']:atomic_write(cached,lambda out:torch.save(target.detach().cpu(),out))
-                graph=ae.graph_encoder(f)
+                    if jo['target_cache'] and (cached.exists() or len(list(cache_root.glob('*.pt')))<o['frozen_cache_items']):
+                        with timings.measure('target_cache_io',host=True):atomic_write(cached,lambda out:torch.save(target.detach().cpu(),out))
+                graph_key=(family,torch.is_autocast_enabled(device.type))
+                if graph_key not in frozen_graphs or o['performance_mode']=='legacy':
+                    with timings.measure('graph_compute'):frozen_graphs[graph_key]=ae.graph_encoder(f).detach()
+                graph=frozen_graphs[graph_key]
             known=torch.rand(1,generator=g).to(device)<jo['known_probability']
             if step<2 and jo['warmup_disclosure_coverage'] and 0<jo['known_probability']<1:known[:]=(iteration%2==0) if step==0 else (iteration%2!=0)
-            observations=observation_batch(c,[item],g,norms,device);noise=torch.randn(target.shape,generator=g).to(device);s=torch.rand(1,generator=g).to(device);state,velocity,mask=flow_path(c,target,noise,s,known,f)
-            prediction=model(state,s,p,observations,known,f,graph);loss=flow_loss(c,prediction,velocity,known,f);components.update(known_parameter=int(known[0]),observations=int(observations[2].sum()))
+            with timings.measure('observation_preparation',host=True):observations=observation_batch(c,[item],g,norms,device)
+            noise=torch.randn(target.shape,generator=g).to(device);s=torch.rand(1,generator=g).to(device);state,velocity,mask=flow_path(c,target,noise,s,known,f)
+            components.update(known_parameter=known[0].detach(),observations=observations[2].sum().detach(),known_parameter_examples=components.get('known_parameter_examples',0)+known.sum().detach(),observation_values=components.get('observation_values',0)+observations[2].sum().detach())
+            if defer:return (state,s,p,observations,known,f,graph,velocity)
+            with timings.measure('flow_compute'):prediction=model(state,s,p,observations,known,f,graph);loss=flow_loss(c,prediction,velocity,known,f)
+            components.update(known_parameter=known[0].detach(),observations=observations[2].sum().detach())
             auxiliary=jo['auxiliary']
             if any(auxiliary[k]>0 for k in ('field','observation','pde')):
                 from .consistency import auxiliary_loss
@@ -144,21 +186,41 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 loss=loss+auxiliary_loss(ae,c,estimate,s,p,known,f,observations,norms[family],auxiliary,item,g)
             return loss
 
+        def flow_microbatch(items,iteration):
+            prepared=[one(item,iteration+i,True) for i,item in enumerate(items)]
+            count=max(x[3][0].shape[1] for x in prepared);observations=[]
+            for j in range(4):
+                rows=[]
+                for x in prepared:
+                    value=x[3][j];padding=value.new_zeros((1,count-value.shape[1],*value.shape[2:]));rows.append(torch.cat([value,padding],1))
+                observations.append(torch.cat(rows))
+            state,s,p,known,f,graph,velocity=[torch.cat([x[j] for x in prepared]) for j in (0,1,2,4,5,6,7)]
+            with timings.measure('flow_compute'):
+                prediction=model(state,s,p,tuple(observations),known,f,graph)
+                return [flow_loss(c,prediction[i:i+1],velocity[i:i+1],known[i:i+1],f[i:i+1]) for i in range(len(items))]
+
         def calibrate():
             values=[];families=[]
             with torch.no_grad():
-                for i in range(min(c.train_count,max(12,o['calibration_count']))):
-                    z,f,_=encode(data.get('train',i));values.append(z.cpu());families.append(int(f[0]))
+                count=min(c.train_count,max(12,o['calibration_count']));size=o['microbatch'] if o['performance_mode']=='optimized' else 1
+                for start in range(0,count,size):
+                    items=data.items(range(start,min(count,start+size)),workers=o['workers'])
+                    with timings.measure('reference_evaluation',host=True):state=state_samples_batch(items,[0.]*len(items),c,norms)
+                    with timings.measure('transfer',host=True):
+                        f=torch.tensor([family_index(x['family']) for x in items],device=device);xy=torch.as_tensor(np.stack([x['context'] for x in items]),device=device);state=state.to(device);p=normalized_parameter(c,torch.tensor([x['parameter'] for x in items],device=device),f)
+                    with timings.measure('encoder_compute'):z=ae.encode(xy,state,p,f)
+                    values.append(z.cpu());families.extend(f.cpu().tolist())
             all_z=torch.cat(values);m=torch.zeros(1,c.tokens,c.width);v=torch.ones_like(m)
             for group in layout(c):
-                valid=torch.tensor([f==1 for f in families]) if group.name=='initial_v' else torch.ones(len(values),dtype=torch.bool)
+                valid=torch.tensor([f==1 for f in families]) if group.name=='initial_v' else torch.ones(len(families),dtype=torch.bool)
                 if valid.any():a=all_z[valid,group.start:group.stop].double();mu=a.mean((0,1));sigma=a.var((0,1),unbiased=False).sqrt().clamp_min(.01);m[:,group.start:group.stop]=mu.float();v[:,group.start:group.stop]=sigma.float()
             return m,v
 
         def save(completed=False):
             nonlocal mean,scale
             tick=time.perf_counter()
-            if stage=='autoencoder' and completed:mean,scale=calibrate()
+            if stage=='autoencoder' and completed:
+                calibration_started=time.perf_counter();mean,scale=calibrate();record['latent_calibration_seconds']=time.perf_counter()-calibration_started
             cp={'schema':SCHEMA,'architecture':ARCHITECTURE,'engine_version':3,'joint_schema':schema(c),'stage':stage,'config':c.to_dict(),'config_identity':digest(c.to_dict()),'progress':step,'completed':completed,'autoencoder':ae.state_dict() if stage!='flow' else None,'velocity':model.state_dict() if stage=='flow' else None,'dependency':dep,'dataset_root':os.path.relpath(data.root,root),'dataset_identity':data.metadata['sha256'],'training_ids':[x for x in data.metadata['ids'] if x.startswith('train:')],'normalization':data.metadata['normalization'],'normalizations':norms,'normalization_fitted_ids':data.metadata['fitted_ids'],'latent_mean':mean,'latent_scale':scale,'optimizer':optimizer.state_dict(),'scheduler':{'settings':settings,'completed_updates':step},'scaler':scaler.state_dict(),'rng':g.get_state(),'torch_rng':torch.get_rng_state(),'cuda_rng':torch.cuda.get_rng_state_all() if device.type=='cuda' else [],'source':code_identity(),'scientific_source':scientific_source(),'environment':environment(RuntimeSpec(**c.runtime)),'history':history,'actual_precision':policy,'source_change_override':source_override,'effective_examples_processed':effective_examples,'field_loss':c.field_loss,'conditioning_policy':jo,'target_cache_identity':cache_identity,'training_seconds':time.perf_counter()-started,'training_physics':physics,'capabilities':{'state_schemas':physics['state_schemas'],'families':list(c.family_weights),'family_weights':c.family_weights,'dimension':2,'fields':['u','v (wave only)'],'state':'initial displacement + initial velocity(wave) + typed scalar; no trajectory latent','parameter_ranges':{'diffusivity':c.diffusivity_range,'wave_speed':c.wave_speed_range},'temporal':{'mode':'continuous','interval':list(c.interval)},'unconditional_trained':c.unconditional_probability>0 or c.observation_counts[0]==0,'scientific_accuracy':False}}
             atomic_write(checkpoint,lambda out:torch.save(cp,out))
             if completed:
@@ -166,41 +228,67 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 if stage=='flow':portable['dataset_root']=None
                 atomic_write(Path(record['export']),lambda out:torch.save(portable,out))
             record.update(state='completed' if completed else 'interrupted',progress=step,history=history[-200:],history_total=len(history),normalization=data.metadata['normalization'],normalizations=norms,training_seconds=time.perf_counter()-started,checkpoint_seconds=time.perf_counter()-tick,parameters=sum(p.numel() for p in model.parameters() if p.requires_grad),dataset_identity=data.metadata['sha256'],updated_at=now(),capabilities=cp['capabilities'])
-            record['checkpoint_bytes']=sum(f.stat().st_size for f in root.glob('*.pt'));record['memory']={'cuda_peak_allocated':torch.cuda.max_memory_allocated(device) if device.type=='cuda' else None,'cuda_peak_reserved':torch.cuda.max_memory_reserved(device) if device.type=='cuda' else None,'mps_current_allocated':torch.mps.current_allocated_memory() if device.type=='mps' else None};write_json(root/'history.json',history);write_json(root/'run.json',record)
+            record['checkpoint_bytes']=sum(f.stat().st_size for f in root.glob('*.pt'));record['memory']={'process_peak_host_rss_bytes':host_peak_bytes(),'host_peak_scope':'Process lifetime RSS high-water mark, not stage-local allocation','cuda_peak_allocated':torch.cuda.max_memory_allocated(device) if device.type=='cuda' else None,'cuda_peak_reserved':torch.cuda.max_memory_reserved(device) if device.type=='cuda' else None,'mps_current_allocated':torch.mps.current_allocated_memory() if device.type=='mps' else None};write_json(root/'history.json',history);write_json(root/'run.json',record)
             if event:event({'stage':stage,'kind':'checkpoint','path':str(root),'record':record,'continuing':not completed})
 
+        record['setup_seconds']=time.perf_counter()-setup_started
+        def scalarize(value):
+            if isinstance(value,dict):return {k:scalarize(v) for k,v in value.items()}
+            if torch.is_tensor(value):return value.detach().float().item()
+            return value
         try:
             since=0
             while step<total:
                 if stop[0] or should_stop and should_stop():break
-                tick=time.perf_counter();optimizer.zero_grad(set_to_none=True);lr=learning_rate(settings,step)
+                synchronize(device);timings.reset();prior_frozen=(cache_hits,cache_misses);prior_region=(cache.hits,cache.misses);tick=time.perf_counter();optimizer.zero_grad(set_to_none=True);lr=learning_rate(settings,step)
                 for group in optimizer.param_groups:group['lr']=lr
                 names=sorted(c.family_weights);weights=torch.tensor([c.family_weights[n] for n in names]);weights/=weights.sum();offset=float(torch.rand((),generator=g));chosen=torch.searchsorted(weights.cumsum(0),(torch.arange(c.batch_size)/c.batch_size+offset)%1).tolist();items=[]
-                # Bounded rejection over deterministic identities; no cross-split variants.
+                # Reject by deterministic family identity, not by constructing
+                # expensive complete wrong-family references. RNG draws unchanged.
+                indices=[]
                 for chosen_family in chosen:
                     for trial in range(1000):
-                        index=int(torch.randint(c.train_count,(),generator=g));item=data.get('train',index)
-                        if item['family']==names[chosen_family]:items.append(item);break
+                        index=int(torch.randint(c.train_count,(),generator=g))
+                        if family_for(c,'train',index)==names[chosen_family]:indices.append(index);break
                     else:raise ValueError('Unable to sample configured family from training split')
+                with timings.measure('dataset_initial_reference',host=True):items=[attach(x) for x in data.items(indices,workers=o['workers'])]
                 components={};batch_loss=0.;per_family={};backward=0.
                 model.train();ae.eval() if stage=='flow' else None;ae.encoder.eval() if stage!='autoencoder' else ae.encoder.train()
-                for b,item in enumerate(items):
-                    with autocast():loss=one(item,step*c.batch_size+b)
-                    if not torch.isfinite(loss):raise FloatingPointError('Nonfinite stage loss')
-                    loss_value=float(loss.detach());batch_loss+=loss_value/c.batch_size;per_family.setdefault(item['family'],[]).append(loss_value)
-                    tb=time.perf_counter();scaler.scale(loss/c.batch_size).backward();backward+=time.perf_counter()-tb
-                scaler.unscale_(optimizer);grad=torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad],settings['gradient_clip'],error_if_nonfinite=True);scaler.step(optimizer);scaler.update();step+=1;since+=1;effective_examples+=c.batch_size;synchronize(device)
-                row={'step':step,'training_loss':batch_loss,'family_example_counts':{k:sum(x['family']==k for x in items) for k in names},'per_family_loss':{k:float(np.mean(v)) for k,v in per_family.items()},'components':components.copy(),'gradient_norm':float(grad),'learning_rate':lr,'step_seconds':time.perf_counter()-tick,'backward_seconds':backward,'reference_seconds_cumulative':reference_seconds,'data_seconds':reference_seconds,'component_timings':{'reference_cumulative_host':reference_seconds,'encoder_cumulative_host':encoder_seconds,'region_reference_cumulative_host':region_seconds,'decoder_cumulative_host':decoder_seconds,'backward_step_host':backward},'timing_semantics':'Host inclusive cumulative component clocks; asynchronous GPU component timings are not kernel timings. Step wall time synchronized.','region_seconds_cumulative':region_seconds,'encoder_seconds_cumulative':encoder_seconds,'decoder_seconds_cumulative':decoder_seconds,'elapsed_seconds':time.perf_counter()-started,'effective_examples':effective_examples,'microbatch_semantics':'one realization at a time with exact batch accumulation; configured upper microbatch bound respected'}
+                use_batch=stage=='flow' and o['performance_mode']=='optimized' and not any(jo['auxiliary'][k]>0 for k in ('field','observation','pde'))
+                size=o['microbatch'] if use_batch else 1
+                for start in range(0,len(items),size):
+                    group=items[start:start+size]
+                    with autocast():losses=flow_microbatch(group,step*c.batch_size+start) if use_batch else [one(group[0],step*c.batch_size+start)]
+                    for item,loss in zip(group,losses):
+                        loss_value=loss.detach().float();batch_loss+=loss_value/c.batch_size;per_family.setdefault(item['family'],[]).append(loss_value)
+                    with timings.measure('backward_compute'):scaler.scale(torch.stack(losses).sum()/c.batch_size).backward()
+                with timings.measure('optimizer_compute'):
+                    scaler.unscale_(optimizer);grad=torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad],settings['gradient_clip'],error_if_nonfinite=policy!='fp16')
+                    # FP16 overflows are GradScaler's responsibility: skip and
+                    # reduce scale, never update parameters with invalid grads.
+                    old_scale=scaler.get_scale();scaler.step(optimizer);scaler.update()
+                step+=1;since+=1;effective_examples+=c.batch_size;synchronize(device)
+                elapsed=time.perf_counter()-tick
+                batch_loss=float(batch_loss)
+                if not math.isfinite(batch_loss):raise FloatingPointError('Nonfinite stage loss')
+                finite=math.isfinite(float(grad));skipped=policy=='fp16' and scaler.get_scale()<old_scale
+                if not finite and not skipped:raise FloatingPointError('Nonfinite gradients without a skipped optimizer update')
+                measured=timings.report()
+                row={'step':step,'training_loss':batch_loss,'family_example_counts':{k:sum(x['family']==k for x in items) for k in names},'per_family_loss':{k:float(torch.stack(v).mean()) for k,v in per_family.items()},'components':scalarize(components),'gradient_norm':float(grad) if finite else None,'gradients_finite':finite,'optimizer_update_skipped':skipped,'scaler_scale':scaler.get_scale(),'learning_rate':lr,'step_seconds':elapsed,'data_seconds':sum((measured or {}).get('host_exclusive_seconds',{}).get(k,0.) for k in ('dataset_initial_reference','reference_evaluation','region_analysis')),'component_timings':measured,'data_seconds_definition':'Sum of exclusive host reference evaluation, region analysis and dataset construction; see nested component scopes for packing/other preprocessing.', 'timing_semantics':'Per-update synchronized wall time, excluding validation/persistence. Nested component scopes explicitly labelled. No cumulative counter is a step cost.','elapsed_seconds':time.perf_counter()-started,'effective_examples':effective_examples,'frozen_cache':{'hits_cumulative':cache_hits,'misses_cumulative':cache_misses,'hits_this_step':cache_hits-prior_frozen[0],'misses_this_step':cache_misses-prior_frozen[1],'items':len(frozen),'bytes':sum(x.numel()*x.element_size() for values in frozen.values() for x in values)},'region_cache':{'hits_cumulative':cache.hits,'misses_cumulative':cache.misses,'hits_this_step':cache.hits-prior_region[0],'misses_this_step':cache.misses-prior_region[1]},'microbatch_semantics':'B default CFM uses actual configured microbatches; A1/A2 and optional decoded B auxiliaries use exact per-realization accumulation within the same effective batch' , 'actual_forward_microbatch':size}
                 if step%o['validation_every']==0 or step==total:
                     ae.eval();model.eval();state=g.get_state();val={};vt=time.perf_counter()
                     with torch.enable_grad() if jo['auxiliary']['pde']>0 else torch.no_grad():
-                        for i in range(min(c.validation_count,max(2,len(names)))):
-                            item=data.get('validation',i);value=float(one(item,step*c.batch_size+i));val.setdefault(item['family'],[]).append(value)
-                    g.set_state(state);row.update(validation_loss=float(np.mean([np.mean(v) for v in val.values()])),validation_per_family={k:float(np.mean(v)) for k,v in val.items()},validation_seconds=time.perf_counter()-vt)
+                        for i in range(min(c.validation_count,max(len(names),o['validation_subset']))):
+                            item=attach(data.get('validation',i));value=float(one(item,step*c.batch_size+i));val.setdefault(item['family'],[]).append(value)
+                    synchronize(device);g.set_state(state);row.update(validation_loss=float(np.mean([np.mean(v) for v in val.values()])),validation_per_family={k:float(np.mean(v)) for k,v in val.items()},validation_seconds=time.perf_counter()-vt)
+                persistence_started=time.perf_counter()
                 history.append(row);record.update(state='running',progress=step,history=history[-200:],history_total=len(history),elapsed_seconds=time.perf_counter()-started);write_json(root/'run.json',record)
                 if step%c.checkpoint_every==0:save(False)
+                row['persistence_seconds']=time.perf_counter()-persistence_started
+                row['end_to_end_seconds']=time.perf_counter()-tick
                 if stop_after and since>=stop_after:break
-            save(step>=total)
+            final_save_started=time.perf_counter();save(step>=total);record['final_persistence_and_calibration_seconds']=time.perf_counter()-final_save_started
+            record['total_wall_seconds']=time.perf_counter()-setup_started;write_json(root/'run.json',record)
         except BaseException as error:
             record.update(state='interrupted' if isinstance(error,KeyboardInterrupt) else 'failed',error=str(error));write_json(root/'run.json',record);raise
         finally:

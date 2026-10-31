@@ -780,3 +780,20 @@ A1 control establish objective/gradient wiring only, not accuracy. Existing mode
 and recorded resume objectives are unchanged. New metadata changes the scientific
 source fingerprint, so older checkpoints still need their recorded source for strict
 resume; inference compatibility is unchanged.
+
+## T4 performance recovery — 31 October 2026
+
+Optimize declared band-limited heat/wave references without changing architecture,
+point budgets, arbitrary physical-time sampling or region-balanced estimator.
+Unrestricted references keep full spectra; invalid declared bandlimits reject.
+Bounded frozen-state caches include source/dependency/data/normalization/sampling/
+precision identities. No prediction-dependent segmentation or observation caching.
+B default CFM now executes true microbatches; A1/A2 retain per-example accumulation.
+Native BF16 support determines auto precision: T4 uses FP16 + GradScaler. Preserve
+blocking CPU/MPS transfers after a real nonfinite MPS regression with async copies.
+Per-update wall clocks replace cumulative data-cost averages; nested host and CUDA
+stream clocks have explicit scopes. Recomputable target caches do not enter new
+persistent snapshots. Existing artifacts remain untouched and strict source resume
+checks are retained. See docs/training-performance.md for before/after evidence,
+limitations, original-source benchmark and exact notebook reload steps. No T4 speed
+or scientific accuracy improvement is claimed from local CPU measurements.

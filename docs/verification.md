@@ -902,3 +902,12 @@ A1/A2 training; B remains latent CFM. Fresh tiny CPU stage/alpha-control executi
 real API configuration traces and rendered browser evidence are recorded in
 `training-equations-verification.md`. Existing artifacts and accuracy limitations
 remain unchanged; no substantial training ran.
+
+## Training performance recovery — 31 October 2026
+
+See [training-performance.md](training-performance.md) and
+outputs/performance-20261031/ for exact workload, baseline source, CPU timing and
+loss/gradient parity, MPS failure/fix, local notebook execution and source-package
+verification. Actual CUDA/Colab timing and FP16 remain unverified; supplied T4
+benchmark preserves requested capacity/points/objective and never launches full
+training. Existing scientific outputs are covered by before/after hash records.

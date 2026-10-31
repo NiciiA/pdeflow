@@ -1,6 +1,7 @@
 """Deterministic shared heat/wave realization splits and bounded references."""
 from pathlib import Path
-from functools import lru_cache
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 import time
 import numpy as np
 import torch
@@ -46,6 +47,10 @@ def initial_pair(c,case,seed,shape=None):
     if case=='velocity_pulse':v=u.copy();u=np.zeros_like(u)
     return u,v,{'kx':kx,'ky':ky,'phase':phase,'amplitude':amplitude,'theta':theta}
 
+def family_for(c,split,index):
+    names=sorted(c.family_weights);rng=np.random.default_rng(np.random.SeedSequence([c.seed,('train','validation','test').index(split),index]));weights=np.array([c.family_weights[n] for n in names]);weights/=weights.sum()
+    return names[index%len(names)] if index<6*len(names) else str(rng.choice(names,p=weights))
+
 def example(c,split,index,shape=None,dtype=np.float32):
     r=recipe(c);s=('train','validation','test').index(split);names=sorted(c.family_weights);rng=np.random.default_rng(np.random.SeedSequence([c.seed,s,index]));weights=np.array([c.family_weights[n] for n in names]);weights=weights/weights.sum()
     # First six realizations of EACH family guarantee fixed validation coverage.
@@ -58,7 +63,7 @@ def example(c,split,index,shape=None,dtype=np.float32):
         omega=parameter*np.sqrt((2*np.pi*meta['kx']/c.lengths[0])**2+(2*np.pi*meta['ky']/c.lengths[1])**2);v=meta['amplitude']*omega*np.sin(meta['theta'])
     if index>=12 and index%17==0:
         u=float(rng.uniform(-.5,.5))+1e-6*(u-u.mean());v=float(rng.uniform(-.2,.2))+1e-6*(v-v.mean());case='approximately_constant'
-    solver=SpectralState(u,v if family=='wave' else None,c.lengths,c.origins,family)
+    solver=SpectralState(u,v if family=='wave' else None,c.lengths,c.origins,family,mode_limit=r['max_wave'],backend=c.training_options.get('performance_mode','optimized'))
     if family=='heat':v=np.zeros_like(u)
     generator=torch.Generator().manual_seed(seed);xy=torch.rand(c.encoder_points,2,generator=generator)*torch.tensor(c.lengths)+torch.tensor(c.origins)
     return {'values':u.astype(dtype).ravel(),'initial':np.stack([u,v],-1).astype(np.float32),'D':parameter,'parameter':parameter,'family':family,'case':case,'id':f'{split}:{index}:{identity(c)[:16]}','seed':[c.seed,s,index],
@@ -72,8 +77,12 @@ class QuantityReference:
 def item_quantity(item,quantity):return {**item,'id':item['id']+':'+quantity,'solver':QuantityReference(item['solver'],quantity)}
 
 def state_samples(item,xy,t,c,norm=None):
-    q=np.c_[np.asarray(xy),np.full(len(xy),float(t))];u=item['solver'].evaluate(q,item['parameter'],c.interval,'u');v=item['solver'].evaluate(q,item['parameter'],c.interval,'v') if item['family']=='wave' else np.zeros(len(q))
-    values=np.stack([u,v],-1)
+    q=np.c_[np.asarray(xy),np.full(len(xy),float(t))]
+    if item['solver'].backend=='legacy':
+        u=item['solver'].evaluate(q,item['parameter'],c.interval,'u');v=item['solver'].evaluate(q,item['parameter'],c.interval,'v') if item['family']=='wave' else np.zeros(len(q));values=np.stack([u,v],-1)
+    else:
+        values=item['solver'].evaluate_state(q,item['parameter'],c.interval,('u','v') if item['family']=='wave' else ('u',))
+        if item['family']=='heat':values=np.c_[values[:,0],np.zeros(len(q))]
     if norm is not None:
         for j,n in enumerate(norm):values[:,j]=(values[:,j]-n['mean'])/n['scale']
         if item['family']=='heat':values[:,1]=0
@@ -81,28 +90,46 @@ def state_samples(item,xy,t,c,norm=None):
 
 class Dataset:
     def __init__(self,c,root,create=True):
-        self.c=c;self.root=Path(root);self.root.mkdir(parents=True,exist_ok=True);path=self.root/'dataset.json';prefix=identity(c)[:16];ids=[f'{s}:{i}:{prefix}' for s,n in zip(('train','validation','test'),(c.train_count,c.validation_count,c.test_count)) for i in range(n)]
+        self.c=c;self._items=OrderedDict();self.cache_limit=c.training_options.get('reference_cache_items',32);self.root=Path(root);self.root.mkdir(parents=True,exist_ok=True);path=self.root/'dataset.json';prefix=identity(c)[:16];ids=[f'{s}:{i}:{prefix}' for s,n in zip(('train','validation','test'),(c.train_count,c.validation_count,c.test_count)) for i in range(n)]
         # IDs do not require solving every realization.
         if path.exists():
             self.metadata=read_json(path)
             if self.metadata['sha256']!=identity(c):raise ValueError('Dataset mixture/recipe identity changed')
             return
         if not create:raise ValueError('Missing representation dataset recipe; restore the run')
-        norms={};fit={};started=time.perf_counter()
-        for family in c.family_weights:
-            samples=[[],[]];fit[family]=[]
-            for i in range(min(c.train_count,max(12,c.training_options.get('calibration_count',12)))):
-                item=self.get('train',i)
-                if item['family']!=family:continue
-                fit[family].append(item['id'])
-                for t in (0.,.137,.4,.8):
-                    state=state_samples(item,item['context'],t,c).numpy()
-                    for j in range(2 if family=='wave' else 1):samples[j].append(state[:,j])
-            norms[family]=[{'mean':float(np.concatenate(a).mean()),'scale':max(float(np.concatenate(a).std()),1e-3)} if a else {'mean':0.,'scale':1.} for a in samples]
+        norms={};fit={f:[] for f in c.family_weights};samples={f:[[],[]] for f in c.family_weights};started=time.perf_counter()
+        for i in range(min(c.train_count,max(12,c.training_options.get('calibration_count',12)))):
+            item=self.get('train',i);family=item['family'];fit[family].append(item['id'])
+            states=state_samples_batch([item]*4,(0.,.137,.4,.8),c).numpy()
+            for state in states:
+                for j in range(2 if family=='wave' else 1):samples[family][j].append(state[:,j])
+        for family,parts in samples.items():
+            norms[family]=[{'mean':float(np.concatenate(a).mean()),'scale':max(float(np.concatenate(a).std()),1e-3)} if a else {'mean':0.,'scale':1.} for a in parts]
         self.metadata={'schema_version':3,'kind':'coordinate_training_data','sha256':identity(c),'recipe':recipe(c),'ids':ids,'normalizations':norms,'fitted_ids':fit,'normalization':{**norms.get('heat',norms.get('wave'))[0],'fitted_ids':sum(fit.values(),[])},'preparation_seconds':time.perf_counter()-started}
         write_json(path,self.metadata)
-    @lru_cache(maxsize=8)
-    def get(self,split,index):return example(self.c,split,int(index))
+    def get(self,split,index):
+        key=(split,int(index))
+        if key not in self._items:
+            self._items[key]=example(self.c,split,int(index))
+            if len(self._items)>self.cache_limit:self._items.popitem(last=False)
+        self._items.move_to_end(key);return self._items[key]
+    def items(self,indices,split='train',workers=0):
+        if workers:
+            with ThreadPoolExecutor(max_workers=workers) as pool:items=list(pool.map(lambda i:example(self.c,split,int(i)),indices))
+        else:items=[self.get(split,int(i)) for i in indices]
+        return items
     def batch(self,indices,split='train',workers=0):
-        items=[self.get(split,int(i)) for i in indices]
+        items=self.items(indices,split,workers)
         return torch.tensor(np.stack([x['values'] for x in items])),torch.tensor([x['parameter'] for x in items]),items
+
+
+def state_samples_batch(items,times,c,norms=None):
+    """Shared heat/wave reference evaluation; fixed context count, arbitrary times."""
+    from pdeflow.numerics.dynamic import evaluate_batch
+    q=np.stack([np.c_[item['context'],np.full(len(item['context']),float(t))] for item,t in zip(items,times)])
+    values=evaluate_batch([x['solver'] for x in items],q,[x['parameter'] for x in items],c.interval)
+    if norms is not None:
+        for b,item in enumerate(items):
+            for j,n in enumerate(norms[item['family']]):values[b,:,j]=(values[b,:,j]-n['mean'])/n['scale']
+            if item['family']=='heat':values[b,:,1]=0
+    return torch.tensor(values,dtype=torch.float32)

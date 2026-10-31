@@ -43,7 +43,7 @@ def publish(local,persistent,keep=3):
     _safe(root,'objects').mkdir(parents=True,exist_ok=True);_safe(root,'snapshots').mkdir(exist_ok=True)
     names=[]
     for p in local.rglob('*'):
-        if not p.is_file() or p.is_symlink() or any(x in ('checkpoints','profile-cache','__pycache__') for x in p.relative_to(local).parts):continue
+        if not p.is_file() or p.is_symlink() or any(x in ('checkpoints','profile-cache','latent-targets','__pycache__') for x in p.relative_to(local).parts):continue
         # Only this workflow's artifacts, not arbitrary data or notebook files.
         if p.suffix in ('.pt','.json','.npz','.png') and p.name!='dataset.npz':names.append(p.relative_to(local).as_posix())
     files={}

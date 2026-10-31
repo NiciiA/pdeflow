@@ -454,3 +454,16 @@ performance. Region balance alpha=.5 is an experimental starting point and may t
 whole-field/background accuracy for distinct-feature emphasis. Actual CPU and MPS
 execution are separate from local notebook-cell execution; CUDA/Colab remain untested.
 Next: bounded controlled A1 validation, then A2 dynamics validation, before larger B.
+
+## 31 October 2026 — bounded performance controls
+
+No substantial training. Identical smoke-config original-source/optimized CPU
+controls (7 updates each A1/A2/B, warmup2/measured5) and independent large-preset
+reference-only cold/warm control (8 repeats) are recorded under
+outputs/performance-20261031/. Reference-only batch medians4.083/.070 s cold,
+4.023/.062 s warm;44 compared FP32 arrays identical. This is CPU preprocessing,
+not requested-large-network throughput or a T4 speedup. Actual model control
+parameter differences <=1.59e-6 and loss/gradient-norm differences <=2.38e-7.
+Region-balanced alpha=.5 remains experimental. No model-quality improvement,
+new optimum, or gate pass is inferred. See docs/training-performance.md for exact
+workload, update/all-in timing differences, source hashes and T4 rerun procedure.

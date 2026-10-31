@@ -126,6 +126,8 @@ checkpoint/output/device arguments. Scientific evaluation is distinct from compl
 
 ## Colab and source transfer
 
+Before substantial training, follow the [T4 performance recovery and source-reload guide](docs/training-performance.md). The updated preflight uses two warmup/eight measured updates, native precision detection and separate setup, reference, compute, validation and persistence clocks.
+
 Open `notebooks/colab.ipynb`. Upload a current source ZIP or configure your own
 repository URL/revision. Set fast local and persistent roots. Choose FAMILIES
 heat/wave/joint, capacity, device/precision, loss and stage budgets. Inspect the

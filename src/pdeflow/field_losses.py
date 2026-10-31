@@ -133,22 +133,23 @@ def metric_record(*args,**kwargs):
     return {k:v for k,v in field_metrics(*args,**kwargs).items() if k not in ('labels','analysis')}
 
 
-def differentiable_loss(prediction,target,weights,kind='mse'):
+def differentiable_loss(prediction,target,weights,kind='mse',validate=True):
     # Cast BEFORE subtraction/reduction: safe under mixed precision, gradients retained.
     error=prediction.float()-target.detach().float();w=weights.detach().to(error.device,dtype=torch.float32)
-    if error.shape!=w.shape or error.shape!=target.shape or not torch.isfinite(w).all() or torch.any(w<0):raise ValueError('Invalid field loss query weights/layout')
+    if error.shape!=w.shape or error.shape!=target.shape or validate and (not torch.isfinite(w).all() or torch.any(w<0)):raise ValueError('Invalid field loss query weights/layout')
     value=error.abs() if kind=='mae' else error.square()
     result=(value*w).sum(1).mean()
-    if not torch.isfinite(result):raise FloatingPointError('Nonfinite field reconstruction loss')
+    if validate and not torch.isfinite(result):raise FloatingPointError('Nonfinite field reconstruction loss')
     return result
 
 
 class AnalysisCache:
-    def __init__(self,limit=32):self.values=OrderedDict();self.limit=limit
+    def __init__(self,limit=32):self.values=OrderedDict();self.limit=limit;self.profiler=None;self.hits=0;self.misses=0
     def get(self,key,make):
         if key not in self.values:
-            self.values[key]=make()
+            self.misses+=1;self.values[key]=make()
             if len(self.values)>self.limit:self.values.popitem(last=False)
+        else:self.hits+=1
         self.values.move_to_end(key);return self.values[key]
 
 
@@ -171,7 +172,12 @@ def grouped_queries(c,items,g,normalization,cache,physical_times=None):
         region_rng=torch.Generator().manual_seed(seed+b*100003+731)
         solver=item.get('solver') or FourierHeat(np.asarray(item['values']).reshape(len(c.times),*c.reference_shape)[0],c.lengths,c.origins)
         times=np.asarray(physical_times) if physical_times is not None else sample_times(c,groups,g,'query').numpy() if c.temporal_mode=='continuous' else np.asarray(c.times)
-        analyses=[cache.get((item['id'],float(t),str(asdict(cfg)),normalization['scale']),lambda t=t:analyze(solver.frame(float(t),item['D'],c.interval,shape=(cfg.analysis_resolution,)*2),c.lengths,c.field_loss,normalization['scale'])) for t in times]
+        def analysis(t):
+            field=solver.frame(float(t),item['D'],c.interval,shape=(cfg.analysis_resolution,)*2)
+            from contextlib import nullcontext
+            with cache.profiler.measure('region_analysis',host=True) if cache.profiler else nullcontext():
+                return analyze(field,c.lengths,c.field_loss,normalization['scale'])
+        analyses=[cache.get((item['id'],float(t),float(item['D']),tuple(c.lengths),tuple(c.origins),str(asdict(cfg)),normalization['scale']),lambda t=t:analysis(t)) for t in times]
         counts=[len(a['regions']) for a in analyses];total=sum(counts)
         if extra and total>extra:raise ValueError(f'{total} retained time-regions exceed region_queries={extra}; increase the explicit fixed region query budget or adjust documented detection settings. No region was dropped.')
         region_allocation=[]
@@ -199,7 +205,11 @@ def grouped_queries(c,items,g,normalization,cache,physical_times=None):
         # No meaningful regions: ordinary MSE, remaining fixed slots masked out.
         if used<c.query_points+extra:
             coords.extend([coords[0]]*(c.query_points+extra-used));weights.extend([0.]*(c.query_points+extra-used))
-        q=np.asarray(coords);queries.append(q);targets.append(solver.evaluate(q,item['D'],c.interval));all_weights.append(weights)
+        q=np.asarray(coords);queries.append(q)
+        # Padded decoder slots have zero loss weight; evaluate their identical
+        # reference query once, without changing query tensors or the estimator.
+        active=solver.evaluate(q[:used],item['D'],c.interval)
+        targets.append(np.r_[active,np.repeat(active[0],len(q)-used)]);all_weights.append(weights)
         stats.append({'regions_per_time':counts,'physical_times':times.tolist(),'domain_queries':c.query_points,'additional_region_queries':extra,'active_queries':used,'decoded_query_budget':len(q),'cap_activations':0})
     return torch.tensor(np.asarray(queries),dtype=torch.float32),torch.tensor(np.asarray(targets),dtype=torch.float32),torch.tensor(np.asarray(all_weights),dtype=torch.float32),stats
 

@@ -99,9 +99,9 @@ class GraphEncoder(nn.Module):
         h=self.node(torch.tensor([VOCAB.index(n.op) for n in g.nodes],device=dev))+self.types(torch.tensor([('scalar','field','coordinate').index(n.signature) for n in g.nodes],device=dev))+self.units(torch.tensor([n.units for n in g.nodes],device=dev,dtype=self.node.weight.dtype))
         a=torch.tensor([e[0] for e in g.edges],device=dev);b=torch.tensor([e[1] for e in g.edges],device=dev);positions=torch.tensor([e[2] for e in g.edges],device=dev)
         for message,update in zip(self.messages,self.updates):
-            m=message(torch.cat([h[a],h[b],self.edge(positions)],-1));aggregated=torch.zeros_like(h).index_add(0,b,m)
+            m=message(torch.cat([h[a],h[b],self.edge(positions)],-1));aggregated=torch.zeros_like(h).index_add(0,b,m.to(h.dtype))
             # Directed edges also send an explicitly reverse structural message.
-            reverse=torch.zeros_like(h).index_add(0,a,message(torch.cat([h[b],h[a],-self.edge(positions)],-1)))
+            reverse=torch.zeros_like(h).index_add(0,a,message(torch.cat([h[b],h[a],-self.edge(positions)],-1)).to(h.dtype))
             h=h+update(aggregated+reverse)
         return h.mean(0)
     def forward(self,families,graphs=None):

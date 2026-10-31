@@ -11,9 +11,12 @@ def options(c):
          'workers':0,'pin_memory':True,'validation_every':c.checkpoint_every,'validation_subset':min(c.validation_count,8),
          'broad_every':max(c.checkpoint_every,5000),'broad_subset':min(c.validation_count,24),
          'calibration_count':min(c.train_count,128),'keep_periodic':2,'observation_locations':'grid',
-         'autoencoder':{},'evolution':{},'flow':{},'allow_source_change':False,'compile':False,'profile_components':False}
+         'autoencoder':{},'evolution':{},'flow':{},'allow_source_change':False,'compile':False,'profile_components':False,'performance_mode':'optimized','reference_cache_items':32,'frozen_cache_items':128}
     if set(c.training_options)-out.keys():raise ValueError('Unknown training options: '+', '.join(sorted(set(c.training_options)-out.keys())))
     out.update(c.training_options)
+    if out['performance_mode'] not in ('optimized','legacy'):raise ValueError('Performance mode: optimized or legacy (comparison only)')
+    for key in ('reference_cache_items','frozen_cache_items'):
+        if type(out[key])!=int or not 1<=out[key]<=256:raise ValueError(key+' must be 1..256')
     if out['precision'] not in ('auto','fp32','bf16','fp16'):raise ValueError('Precision: auto, fp32, bf16 or fp16')
     for key in ('microbatch','accumulation','validation_every','validation_subset','broad_every','broad_subset','calibration_count','keep_periodic'):
         if type(out[key])!=int or out[key]<1:raise ValueError(f'{key} must be a positive integer')
@@ -31,12 +34,22 @@ def options(c):
     return out
 
 
+def cuda_precision_support(device=None):
+    device=device or torch.device('cuda')
+    with torch.cuda.device(device):
+        try:native=bool(torch.cuda.is_bf16_supported(including_emulation=False))
+        except TypeError:native=torch.cuda.get_device_capability(device)[0]>=8
+        emulated_or_native=bool(torch.cuda.is_bf16_supported())
+    return {'bf16_native':native,'bf16_including_emulation':emulated_or_native,'bf16_emulation_only':emulated_or_native and not native,'fp16':True}
+
+
 def precision(policy,device):
     if device.type!='cuda':
         if policy not in ('auto','fp32'):raise ValueError('BF16/FP16 training here requires a CUDA device; select fp32 for CPU/MPS')
         return 'fp32',torch.float32
-    if policy=='auto':policy='bf16' if torch.cuda.is_bf16_supported() else 'fp16'
-    if policy=='bf16' and not torch.cuda.is_bf16_supported():raise ValueError('This GPU does not support BF16; select fp16 or fp32 explicitly')
+    native=cuda_precision_support(device)['bf16_native']
+    if policy=='auto':policy='bf16' if native else 'fp16'
+    if policy=='bf16' and not native:raise ValueError('This GPU has no native BF16 support (emulation is not a training policy); select fp16 or fp32')
     return policy,{'fp32':torch.float32,'bf16':torch.bfloat16,'fp16':torch.float16}[policy]
 
 
