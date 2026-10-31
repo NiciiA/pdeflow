@@ -14,8 +14,9 @@ def status(session):
     if active:
         rows=active.get('history',[]);timed=[r['step_seconds'] for r in rows[-20:] if 'step_seconds' in r]
         mean=float(np.median(timed)) if len(timed)>=5 else None
-        record={**record,'stage':active['stage'],'stage_state':active['state'],'update':active['progress'],'planned':active['budget'],'elapsed_seconds':active.get('elapsed_seconds',active.get('training_seconds')),
-          'examples_per_second':active['config']['batch_size']/mean if mean else None,'estimated_stage_seconds_remaining':(active['budget']-active['progress'])*mean if mean else None,
+        recent=rows[-20:];wall=sum(v['step_seconds'] for v in recent if 'step_seconds' in v);successful=sum(not v.get('optimizer_update_skipped',False) for v in recent);rate=successful/wall if len(timed)>=5 and wall>0 else None
+        record={**record,'stage':active['stage'],'stage_state':active['state'],'attempted_updates':active.get('attempted_updates',active['progress']),'successful_updates':active['progress'],'skipped_updates':active.get('skipped_updates',0),'batch_settings':active.get('batch_settings'),'update':active['progress'],'planned':active['budget'],'elapsed_seconds':active.get('elapsed_seconds',active.get('training_seconds')),
+          'examples_per_second':active['config']['batch_size']/mean if mean else None,'estimated_stage_seconds_remaining':(active['budget']-active['progress'])/rate if rate else None,
           'memory':active.get('memory'),'history':rows,'actual_precision':active.get('precision')}
     sync=root/'sync-status.json'
     if sync.exists():record['persistent_checkpoint']=read_json(sync)
@@ -30,6 +31,7 @@ def display_status(session,plots=True):
     r=status(session);clear_output(wait=True)
     print(f"{session.name} · {r['state']} · {r.get('stage','')} · {r.get('update',0)}/{r.get('planned','—')} optimizer updates")
     print('ETA:',round(r['estimated_stage_seconds_remaining']), 's' if r.get('estimated_stage_seconds_remaining') is not None else '') if r.get('estimated_stage_seconds_remaining') is not None else print('ETA: waiting for at least five measured updates')
+    print('Attempted / successful / skipped:',r.get('attempted_updates'),r.get('successful_updates'),r.get('skipped_updates'),'· batch settings:',r.get('batch_settings'))
     print('Throughput:',r.get('examples_per_second'),'examples/s · precision:',r.get('actual_precision'))
     print('Elapsed stage wall time:',r.get('elapsed_seconds'),'s')
     if r.get('representation_quality'):print('Representation gate:',r['representation_quality'],'· explicit override:',r.get('gate_override',False))

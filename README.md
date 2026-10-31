@@ -126,7 +126,7 @@ checkpoint/output/device arguments. Scientific evaluation is distinct from compl
 
 ## Colab and source transfer
 
-Before substantial training, follow the [actual A1/A2 batching and Colab benchmark guide](docs/batched-training.md). The earlier [T4 performance recovery](docs/training-performance.md) records the reference/precision changes. The updated preflight uses two warmup/eight measured updates, native precision detection and separate setup, reference, compute, validation and persistence clocks.
+Use the [batch configure → benchmark → apply → train guide](docs/batch-settings.md) for the active training UI and Colab notebook. It includes per-stage sizes, explicit budget policies, and authoritative Session application. The [actual A1/A2 batching guide](docs/batched-training.md) records the earlier throughput work. The earlier [T4 performance recovery](docs/training-performance.md) records the reference/precision changes. The updated preflight uses two warmup/eight measured updates, native precision detection and separate setup, reference, compute, validation and persistence clocks.
 
 Open `notebooks/colab.ipynb`. Upload a current source ZIP or configure your own
 repository URL/revision. Set fast local and persistent roots. Choose FAMILIES

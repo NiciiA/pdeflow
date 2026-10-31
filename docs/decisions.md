@@ -816,3 +816,21 @@ Actual8/16/32 sweep uses one explicit effective batch>=32 for every variant; an
 original effective8 comparison must instead use microbatches<=8. Never silently
 change the training preset to achieve a throughput result. Evidence and limits:
 docs/batched-training.md. Medium/T4 measurements still require the supplied sweep.
+
+## Batch experiments become explicit session configuration —31 October2026
+
+Use shared training_settings for validation, per-stage resolution, budget conversion
+and actual Session replacement/application. New UI requests consume the returned
+configuration; Colab rebinds the returned Session. Do not mutate an active worker,
+reuse stale resource profiles or rewrite original continuation provenance. Auto is
+conservative and explicitly unqualified until measured. Batch sizes up to1024/custom
+are allowed subject to effective/microbatch validation, not a memory-fit promise.
+
+Separate efficiency (same effective/ordered draws/optimizer/science) from optional
+learning comparisons (examples, wall, or successful-update budgets). Isolate each
+candidate in a subprocess, preserve partial results, distinguish real OOM from errors,
+and recommend only completed stable conditions without skipped steps. Larger batch
+memory is never assumed to imply throughput. Applying a result is distinct from
+benchmark completion and actual training. Successful updates alone advance scheduler/
+progress; overflow attempts/examples and consecutive failures persist independently.
+See docs/batch-settings.md for exact semantics and evidence; CUDA remains unverified.

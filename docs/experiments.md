@@ -482,3 +482,14 @@ not a full continuous-time/dataset cache. Full raw data, setup/IO/cache/host-mem
 and variability are retained. Actual MPS A1/A2/B passed; actual Medium/T4 sweep
 remains unexecuted here. No scientific quality improvement or optimal batch is
 inferred. docs/batched-training.md includes exact Colab source reload and commands.
+
+## Configure → benchmark → apply → actual training —31 October2026
+
+outputs/batch-settings-20261031/ records actual local CPU/IPython notebook execution,
+bounded efficiency and learning experiments, and a real rendered MPS workbench chain.
+Application changed the actual Session/request, preserved science/name/storage, and
+invalidated stale preflight. Browser worker effective4 used A1/B [2,2] and A2
+[1,1,1,1],2 successful updates each. The learning check held exposure at28 examples
+for effective2 versus4; wall/update budget semantics and mocked OOM/overflow are
+separate tests. No test-based model selection or accuracy improvement is claimed.
+These are pipeline-check models only, no substantial training or CUDA/Colab run.

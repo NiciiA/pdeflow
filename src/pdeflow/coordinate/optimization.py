@@ -6,12 +6,12 @@ import torch
 from pdeflow.runtime import digest
 
 
-def options(c):
+def options(c,stage=None):
     out={'precision':'fp32','microbatch':c.batch_size,'accumulation':1,'activation_checkpointing':False,
          'workers':0,'pin_memory':True,'validation_every':c.checkpoint_every,'validation_subset':min(c.validation_count,8),
          'broad_every':max(c.checkpoint_every,5000),'broad_subset':min(c.validation_count,24),
          'calibration_count':min(c.train_count,128),'keep_periodic':2,'observation_locations':'grid',
-         'autoencoder':{},'evolution':{},'flow':{},'allow_source_change':False,'compile':False,'profile_components':False,'performance_mode':'optimized','reference_cache_items':32,'frozen_cache_items':128,'execution':'batched','frozen_prefetch':1}
+         'autoencoder':{},'evolution':{},'flow':{},'allow_source_change':False,'compile':False,'profile_components':False,'performance_mode':'optimized','reference_cache_items':32,'frozen_cache_items':128,'execution':'batched','frozen_prefetch':1,'stage_batches':{},'batch_selection':None,'batch_change_authorization':None,'max_consecutive_overflows':8,'initial_scale':65536.}
     if set(c.training_options)-out.keys():raise ValueError('Unknown training options: '+', '.join(sorted(set(c.training_options)-out.keys())))
     out.update(c.training_options)
     if out['execution'] not in ('batched','accumulated'):raise ValueError('Execution: batched or accumulated')
@@ -20,9 +20,17 @@ def options(c):
     for key in ('reference_cache_items','frozen_cache_items'):
         if type(out[key])!=int or not 1<=out[key]<=256:raise ValueError(key+' must be 1..256')
     if out['precision'] not in ('auto','fp32','bf16','fp16'):raise ValueError('Precision: auto, fp32, bf16 or fp16')
-    for key in ('microbatch','accumulation','validation_every','validation_subset','broad_every','broad_subset','calibration_count','keep_periodic'):
+    for key in ('accumulation','validation_every','validation_subset','broad_every','broad_subset','calibration_count','keep_periodic'):
         if type(out[key])!=int or out[key]<1:raise ValueError(f'{key} must be a positive integer')
-    if out['microbatch']>c.batch_size or out['accumulation']!=math.ceil(c.batch_size/out['microbatch']):raise ValueError('Accumulation must equal ceil(effective batch size / microbatch); the final microbatch may be smaller')
+    from pdeflow.training_settings import resolve_batches
+    batches=resolve_batches(c)
+    if 'accumulation' not in c.training_options:out['accumulation']=math.ceil(c.batch_size/(min(c.batch_size,8) if out['microbatch']=='auto' else out['microbatch']))
+    base=min(c.batch_size,8) if out['microbatch']=='auto' else out['microbatch']
+    if out['accumulation']!=math.ceil(c.batch_size/base):raise ValueError('Accumulation must equal ceil(effective batch / GPU microbatch); final microbatch may be smaller')
+    out['microbatch']=base
+    if stage is not None:out.update(microbatch=batches[stage]['microbatch'],accumulation=batches[stage]['accumulation'])
+    if type(out['max_consecutive_overflows'])!=int or out['max_consecutive_overflows']<1:raise ValueError('Overflow limit must be positive')
+    if not math.isfinite(out['initial_scale']) or out['initial_scale']<=0:raise ValueError('Initial scaler scale must be finite positive')
     if type(out['workers'])!=int or not 0<=out['workers']<=4:raise ValueError('Use 0–4 bounded data-generation threads')
     if out['compile']:raise ValueError('Compilation is not enabled for this checkpointed dynamic observation architecture; use eager execution')
     if out['observation_locations'] not in ('grid','scattered'):raise ValueError('Observation locations: grid or scattered')
@@ -64,7 +72,7 @@ def learning_rate(settings,completed):
 
 def scientific_source():
     base=Path(__file__).parents[1]
-    names=['coordinate/contracts.py','coordinate/graph.py','coordinate/physics.py','numerics/dynamic.py','coordinate/model.py','coordinate/joint.py','coordinate/consistency.py','coordinate/profiling.py','coordinate/training.py','coordinate/engine.py','coordinate/frozen.py','coordinate/batching.py','coordinate/dataset.py','coordinate/optimization.py','coordinate/temporal.py','heat_continuous.py','heat_placement.py','field_losses.py','numerics/__init__.py','core/__init__.py','equations/__init__.py']
+    names=['coordinate/contracts.py','coordinate/graph.py','coordinate/physics.py','numerics/dynamic.py','coordinate/model.py','coordinate/joint.py','coordinate/consistency.py','coordinate/profiling.py','coordinate/training.py','coordinate/engine.py','training_settings.py','coordinate/frozen.py','coordinate/batching.py','coordinate/dataset.py','coordinate/optimization.py','coordinate/temporal.py','heat_continuous.py','heat_placement.py','field_losses.py','numerics/__init__.py','core/__init__.py','equations/__init__.py']
     files={n:hashlib.sha256((base/n).read_bytes()).hexdigest() for n in names}
     return {'files':files,'sha256':digest(files),'policy':'Scientific model/data/loss/numerical source, excluding notebook, docs and unrelated UI'}
 
@@ -80,8 +88,12 @@ def resume_contract(old,c,stage,extend=False):
     prior=CoordinateConfig(**old['config']).validate()
     differences=[k for k,v in model_contract(c).items() if digest(v)!=digest(model_contract(prior).get(k))]
     if differences:raise ValueError('Incompatible model/data changes: '+', '.join(differences))
+    from pdeflow.training_settings import batch_identity
+    if batch_identity(prior)!=batch_identity(c):
+        authorization=options(c)['batch_change_authorization'] or {}
+        if digest(batch_identity(prior)) not in [authorization.get('from'),*authorization.get('from_alternatives',[])] or authorization.get('to')!=digest(batch_identity(c)) or not authorization.get('explicit_continuation'):raise ValueError('Batch changes on resume require explicit apply_training_settings(..., continuation=True)')
     old_total=getattr(prior,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[stage]);new_total=getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[stage])
-    if new_total!=old_total and not (extend and new_total>old_total):raise ValueError('A changed update budget requires deliberate extend mode and a larger total')
+    if new_total!=old_total and not (extend and new_total>old_total) and not (options(c)['batch_change_authorization'] or {}).get('explicit_continuation'):raise ValueError('A changed update budget requires deliberate extend mode and a larger total')
     current=options(c)[stage];saved=old['scheduler']['settings']
     # An extension keeps the original schedule horizon, then holds its terminal LR.
     for key in current:
@@ -99,3 +111,12 @@ def representation_contract(c):
     """Flow-only auxiliary/cache switches do not change the frozen representation."""
     value=model_contract(c);value['joint']={k:v for k,v in value['joint'].items() if k not in ('auxiliary','target_cache')}
     return value
+
+
+def optimizer_step(optimizer,scaler,parameters,clip,policy):
+    scaler.unscale_(optimizer)
+    grad=torch.nn.utils.clip_grad_norm_(parameters,clip,error_if_nonfinite=policy!='fp16')
+    old_scale=scaler.get_scale();scaler.step(optimizer);scaler.update()
+    finite=math.isfinite(float(grad));skipped=policy=='fp16' and scaler.get_scale()<old_scale
+    if not finite and not skipped:raise FloatingPointError('Nonfinite gradients without skipped optimizer update')
+    return grad,finite,skipped

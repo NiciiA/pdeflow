@@ -543,3 +543,13 @@ hashes are setup metadata. Measurements distinguish per-step lookup/reference/
 encoding/serialization/IO and cumulative counters. The accumulated execution path
 is retained as a numerical control. See docs/batched-training.md; this accelerates
 the existing scalar2D heat/wave slice without reducing the modular1D–3D roadmap.
+
+### Authoritative training settings and disposable experiments
+
+training_settings owns batch validation, per-stage resolution, budget conversion,
+explicit continuation authorization and immutable Session replacement. The Colab
+binding and UI request consume that returned configuration. batch_experiments runs
+selected-stage disposable subprocesses and persists identities, results/partial
+progress and stable recommendations; it never advances the actual run. Optimizer
+successful/attempted/skip/example counters are separate. Workbench batch_settings
+is a thin adapter to these shared APIs. No scientific architecture/objective change.

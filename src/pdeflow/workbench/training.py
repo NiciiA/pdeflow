@@ -42,6 +42,8 @@ class Extension(BaseModel):
 
 
 def register(app, workspace):
+    from .batch_settings import register as register_batches
+    register_batches(app,workspace)
     @app.get('/api/training/options')
     def options():
         return workflow.options()

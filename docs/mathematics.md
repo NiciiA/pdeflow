@@ -830,3 +830,15 @@ B retains its per-realization/group-masked CFM velocity objective. Batched graph
 embeddings share the same differentiable graph network; reuse inside one forward
 does not freeze the A2 graph parameters. Exact-time frozen encoder memoization
 changes neither the physical-time proposal nor the supervision/conditioning RNG.
+
+## Effective batch and successful-update accounting
+
+For effective B and forward groups of sizes m_j summing to B, the optimizer loss
+is sum_j sum_(i in group j) L_i/B. Accumulation is ceil(B/m), including a final
+remainder; dividing every group by the group size would overweight that remainder.
+Per-example/per-quantity/region reductions are unchanged. Scaler-overflow attempts
+consume B examples and fresh sampling RNG but do not update parameters, scheduler
+or successful progress. Fixed-example experiments count attempts/exposure; fixed
+successful updates need not have equal exposure, especially across B or overflows.
+Approximate example-preserving budgets round remaining updates up; the extra
+examples and existing two-update B floor are explicit. No LR scaling is implied.

@@ -138,7 +138,7 @@ def plan(request):
             'requested_device': request['device'], 'resolved_device': str(dev), 'config': config,
             'distribution': __import__('pdeflow.coordinate.dataset',fromlist=['recipe']).recipe(c) if model=='resolution-flexible' and c.temporal_mode=='continuous' else distribution(physical), 'examples': examples, 'updates': updates,
             'architecture_parameters':__import__('pdeflow.coordinate.presets',fromlist=['counts']).counts(c),
-            'stages': stages,'training_physics':physics, 'grid': physical.to_dict()['grid'],
+            'batch_settings':__import__('pdeflow.training_settings',fromlist=['resolve_batches']).resolve_batches(c),'stages': stages,'training_physics':physics, 'grid': physical.to_dict()['grid'],
             'equation': ' · '.join(physics['equations'].values()),
             'varies': 'Periodic initial-field shape mixtures, continuous physical times and an independent observation-placement mixture. Initial-field mixture types are not PDE families.',
             'quality_policy': {'max_mse_ratio': float(ratio), 'override': request.get('allow_poor_representation', False),
@@ -180,6 +180,9 @@ def _spawn(path):
 
 
 def start(request, workspace=None, token=None, background=True):
+    from .batch_experiments import status as batch_status,ACTIVE as batch_active
+    for file in (local.workspace_root(workspace)/'batch-experiments').glob('*/experiment.json'):
+        if batch_status(file.parent)['state'] in batch_active:raise ValueError('Finish/cancel the batch benchmark before training')
     resolved = plan(request)  # validate availability/physics before any run allocation
     root = _root(workspace); root.mkdir(parents=True, exist_ok=True)
     token = token or uuid.uuid4().hex
@@ -558,7 +561,10 @@ def coordinate_stages(config,path,stages='both',mode='new',dependency=None,gate_
     def run(kind,root,dep=None):
         stage({'autoencoder':'representation'}.get(kind,kind));resume=(root/'resume.pt').exists()
         if resume:
-            cp,_=read_checkpoint(root/'resume.pt',kind);resume_contract(cp,c,kind,mode=='extend')
+            cp,old_c=read_checkpoint(root/'resume.pt',kind)
+            from .coordinate.optimization import model_contract,scientific_source
+            if cp['completed'] and cp['progress']==getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[kind]) and model_contract(old_c)==model_contract(c) and cp['scientific_source']['sha256']==scientific_source()['sha256']:return read_json(root/'run.json')
+            resume_contract(cp,c,kind,mode=='extend')
             total=getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[kind])
             if cp['completed'] and cp['progress']==total:return read_json(root/'run.json')
             if kind!='flow' and (fl/'resume.pt').exists():raise ValueError('Changing the frozen representation/operator requires a new downstream run')

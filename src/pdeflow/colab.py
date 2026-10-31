@@ -72,7 +72,7 @@ def summary(c):
     from pdeflow.coordinate.presets import counts as parameter_counts
     counts=parameter_counts(c)
     o=options(c);nodes=int(np.prod(c.reference_shape));bytes_example=nodes*(c.animation_frames if c.temporal_mode=='continuous' else len(c.times))*4
-    return {'architecture':'Operator-Aware Physical Latent v2','parameters':counts,
+    return {'batch_settings':__import__('pdeflow.training_settings',fromlist=['resolve_batches']).resolve_batches(c),'architecture':'Operator-Aware Physical Latent v2','parameters':counts,
       'field_reconstruction_loss':__import__('dataclasses').asdict(__import__('pdeflow.field_losses',fromlist=['settings']).settings(c.field_loss)),
       'supervision_query_cost':{'domain_queries':c.query_points,'additional_region_queries':__import__('pdeflow.field_losses',fromlist=['settings']).settings(c.field_loss).region_queries if __import__('pdeflow.field_losses',fromlist=['settings']).settings(c.field_loss).type=='region_balanced_mse' else 0},
       'config':c.to_dict(),'training_examples':c.train_count,'validation_examples':c.validation_count,'untouched_test_examples':c.test_count,
@@ -100,7 +100,7 @@ def gallery(c,output):
 def profile(c,local_root,allow_cpu_check=False,updates=10,warmup=2):
     if updates<warmup+5 or warmup<1:raise ValueError('Profile requires >=1 warmup and >=5 measured updates')
     from pdeflow.coordinate.profiling import distribution
-    guard(c,allow_cpu_check);requested=digest(c.to_dict());o=options(c);report={'requested_config':requested,'hardware':hardware(c.runtime['device']),'success':False}
+    guard(c,allow_cpu_check);requested=digest(c.to_dict());o=options(c);report={'scientific_source':scientific_source()['sha256'],'requested_config':requested,'hardware':hardware(c.runtime['device']),'success':False}
     from pdeflow.coordinate.training import train
     from pdeflow.coordinate.validation import representation,flow as validate_flow
     dev,_=RuntimeSpec(**c.runtime).resolve();devices=list(range(torch.cuda.device_count())) if dev.type=='cuda' else []
@@ -116,7 +116,7 @@ def profile(c,local_root,allow_cpu_check=False,updates=10,warmup=2):
                     'update_wall_seconds':distribution([v['step_seconds'] for v in measured]),'end_to_end_update_seconds':distribution([v['end_to_end_seconds'] for v in measured]),'examples_per_second':pc.batch_size/seconds,'warmup_rows':rows[:warmup],
                     'setup_seconds':r['setup_seconds'],'final_persistence_and_calibration_seconds':r['final_persistence_and_calibration_seconds'],'latent_calibration_seconds':r.get('latent_calibration_seconds',0.),'cache_bytes':sum(f.stat().st_size for f in stage_root.rglob('*') if f.is_file() and 'latent-targets' in f.parts),'frozen_cache':rows[-1]['frozen_cache'],'cache_population_and_io_seconds':sum(sum((v.get('component_timings') or {}).get('host_exclusive_seconds',{}).get(k,0.) for k in ('frozen_cache_store','target_cache_io')) for v in rows),'skipped_updates':sum(v['optimizer_update_skipped'] for v in rows),
                     'data_seconds':float(np.mean([v['data_seconds'] for v in rows])),'validation_seconds':sum(v.get('validation_seconds',0) for v in rows),'component_timings_after_warmup':[v.get('component_timings') for v in measured],'memory':r.get('memory',{'note':'Device peak allocation unavailable for this backend'}),'checkpoint_bytes':sum(f.stat().st_size for f in stage_root.glob('*.pt')),
-                    'rough_training_seconds':seconds*(getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[stage])),'cost_scope':'Warmup excluded from update distribution. End-to-end updates include scheduled validation/persistence. Setup and final calibration/export separate. Duration estimate excludes these costs; not a deadline guarantee.'}
+                    'successful_updates_per_second':sum(not v['optimizer_update_skipped'] for v in measured)/sum(v['step_seconds'] for v in measured),'rough_training_seconds':getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[stage])*sum(v['step_seconds'] for v in measured)/sum(not v['optimizer_update_skipped'] for v in measured) if any(not v['optimizer_update_skipped'] for v in measured) else None,'cost_scope':'Warmup excluded from update distribution. End-to-end updates include scheduled validation/persistence. Setup and final calibration/export separate. Duration estimate excludes these costs; not a deadline guarantee.'}
             t=time.perf_counter();representation(p/'autoencoder/autoencoder.pt',p/'representation-validation.json',c.runtime['device'],subset=min(2,c.validation_count));report['physical_validation_seconds']=time.perf_counter()-t
             t=time.perf_counter();validate_flow(p/'flow/coordinate.pt',p/'flow-validation.json',c.runtime['device'],subset=1,counts=[max(1,c.observation_counts[0])],noises=[0.],particles=1,steps=2,resolution=16)
             report['flow_reconstruction_validation_seconds']=time.perf_counter()-t
@@ -144,8 +144,54 @@ class Session:
         self.root.mkdir(parents=True,exist_ok=True);self.allow_cpu_check=allow_cpu_check;self.last_sync=0.;self.snapshot=None
         if not 1<=sync_seconds<=86400 or type(keep_snapshots)!=int or not 1<=keep_snapshots<=20:raise ValueError('Sync seconds must be 1–86400; retain 1–20 persistent snapshots')
         self.sync_seconds=sync_seconds;self.keep_snapshots=keep_snapshots
+    def plan_batch_experiment(self,**kwargs):
+        from .batch_experiments import plan
+        profile=self.root/'profile.json'
+        if profile.exists():
+            measured=read_json(profile)
+            if measured.get('success') and measured.get('requested_config')==digest(self.c.to_dict()) and measured.get('scientific_source')==scientific_source()['sha256'] and all((measured['hardware']['gpu'] or {}).get(k)==(hardware(self.c.runtime['device'])['gpu'] or {}).get(k) for k in ('name','total_bytes','capability','bf16_native')):
+                kwargs.setdefault('observed_seconds',{s:r['step_seconds'] for s,r in measured['stages'].items()})
+        return plan(self.c,**kwargs)
+    def benchmark_batch_sizes(self,background=True,**kwargs):
+        from .batch_experiments import start
+        from .local import is_locked
+        if is_locked(self.root):raise ValueError('Stop the active training worker before benchmarking batch sizes')
+        directory=self.root/'batch-experiments';directory.mkdir(exist_ok=True)
+        for path in directory.glob('*/experiment.json'):
+            if read_json(path)['state'] in ('queued','running','stopping'):raise ValueError('A batch experiment is already active; inspect/cancel it first')
+        profile=self.root/'profile.json'
+        if profile.exists():
+            measured=read_json(profile)
+            if measured.get('success') and measured.get('requested_config')==digest(self.c.to_dict()) and measured.get('scientific_source')==scientific_source()['sha256']:kwargs.setdefault('observed_seconds',{s:r['step_seconds'] for s,r in measured['stages'].items()})
+        return start(self.c,directory/uuid.uuid4().hex,background=background,**kwargs)
+    def batch_experiment(self,identifier):
+        from .batch_experiments import status
+        if not identifier.isalnum() or len(identifier)!=32:raise ValueError('Invalid experiment ID')
+        return status(self.root/'batch-experiments'/identifier)
+    def stop_batch_experiment(self,identifier):
+        from .batch_experiments import stop
+        if not identifier.isalnum() or len(identifier)!=32:raise ValueError('Invalid experiment ID')
+        return stop(self.root/'batch-experiments'/identifier)
+    def apply_batch_result(self,identifier,recommended=True,selections=None,budget_policy='keep_updates',continuation=False):
+        from .batch_experiments import selected_settings
+        record=self.batch_experiment(identifier);settings=selected_settings(self.c,record,selections,recommended)
+        return apply_training_settings(self,settings,budget_policy,continuation,selection={'method':'benchmark recommendation' if recommended else 'manual benchmark selection','experiment_id':identifier,'science_identity':record['plan']['science_identity'],'mode':record['plan']['mode']})
+    def apply_training_settings(self,settings,budget_policy='keep_updates',continuation=False):
+        return apply_training_settings(self,settings,budget_policy,continuation)
+    def training_summary(self):
+        from .training_settings import resolve_batches
+        result=resolve_batches(self.c);device,_=RuntimeSpec(**self.c.runtime).resolve();actual,_=precision(options(self.c)['precision'],device)
+        for stage,row in result.items():
+            path=self.root/stage/'run.json'
+            saved=read_json(path) if path.exists() else {};done=saved.get('progress',0);history=saved.get('history',[])
+            processed=history[-1].get('effective_examples',0) if history else 0
+            row.update(successful_updates_to_date=done,remaining_successful_updates=max(0,row['planned_successful_updates']-done),examples_processed_to_date=processed,approximate_examples=processed+max(0,row['planned_successful_updates']-done)*self.c.batch_size)
+        record=read_json(self.root/'session.json') if (self.root/'session.json').exists() else {}
+        return {'run_name':self.name,'configuration_state':'applied' if (self.root/'applied-settings.json').exists() else 'configured','training_state':record.get('state','not started'),'next_action':'Configuration application does not launch training','precision':actual,'stages':result}
     def inspect(self):return {'hardware':hardware(self.c.runtime['device'],self.root),'configuration':summary(self.c),'persistent':str(self.persistent)}
     def preflight(self,updates=10,warmup=2):
+        from .local import is_locked
+        if is_locked(self.root):raise ValueError('Stop the active training worker before resource preflight')
         result=profile(self.c,self.root.parent,self.allow_cpu_check,updates,warmup);write_json(self.root/'profile.json',result);return result
     def sync(self,force=False):
         from .persistence import publish
@@ -162,7 +208,13 @@ class Session:
         from pdeflow.local import run_lock
         with run_lock(self.root):return self._run_owned(*args,**kwargs)
     def _run_owned(self,stages='both',mode='new',representation_run='',gate_ratio=1.,override_gate=False,stop_after=None):
+        from .batch_experiments import status,ACTIVE
+        for file in (self.root/'batch-experiments').glob('*/experiment.json'):
+            if status(file.parent)['state'] in ACTIVE:raise ValueError('Finish/cancel the batch experiment before actual training')
         from .training_workflow import coordinate_stages
+        applied=self.root/'applied-settings.json'
+        if applied.exists() and read_json(applied)['config_identity']!=digest(self.c.to_dict()):raise ValueError('This Session has stale settings; rebind the result of apply_training_settings before training')
+        print('Authoritative training settings:',json.dumps(self.training_summary(),indent=2))
         if mode in ('resume','extend'):
             if not (self.root/'session.json').exists():self.restore()
             previous=read_json(self.root/'session.json')
@@ -180,7 +232,7 @@ class Session:
             if not (self.root/'profile.json').exists():raise ValueError('Run the real preflight profile first')
             prof=read_json(self.root/'profile.json')
             stable=lambda g:{k:g[k] for k in ('name','total_bytes','capability','bf16')} if g else None
-            if not prof['success'] or prof['requested_config']!=digest(self.c.to_dict()) or stable(prof['hardware']['gpu'])!=stable(hardware(self.c.runtime['device'])['gpu']):
+            if not prof['success'] or prof.get('scientific_source')!=scientific_source()['sha256'] or prof['requested_config']!=digest(self.c.to_dict()) or stable(prof['hardware']['gpu'])!=stable(hardware(self.c.runtime['device'])['gpu']):
                 raise ValueError('Profile does not match this configuration/GPU; profile the current settings before substantial training')
         dependency=None
         if representation_run:
@@ -194,7 +246,7 @@ class Session:
             archive=self.root/'budgets'/uuid.uuid4().hex[:12];archive.mkdir(parents=True)
             shutil.copytree(self.root/'export',archive/'export');write_json(archive/'session.json',previous)
         attempts=previous.get('attempts',[])+[{'mode':mode,'stages':stages,'gate_override':override_gate,'gate_ratio':gate_ratio,'config_identity':digest(self.c.to_dict()),'time':time.time()}]
-        record={'kind':'pdeflow_colab_session','name':self.name,'config':self.c.to_dict(),'stages':stages,'mode':mode,'state':'starting','gate_ratio':gate_ratio,'gate_override':override_gate,'attempts':attempts,
+        record={'initial_config':previous.get('initial_config',previous.get('config',self.c.to_dict())),'batch_settings':self.training_summary(),'kind':'pdeflow_colab_session','name':self.name,'config':self.c.to_dict(),'stages':stages,'mode':mode,'state':'starting','gate_ratio':gate_ratio,'gate_override':override_gate,'attempts':attempts,
                 'scientific_source':scientific_source(),'environment':environment(RuntimeSpec(**self.c.runtime)),'started_unix':time.time(),
                 'persistence_policy':{'sync_seconds':self.sync_seconds,'keep_snapshots':self.keep_snapshots,'boundary':'after completed optimizer-step checkpoints; plus final sync'}}
         write_json(manifest,record)
@@ -238,3 +290,6 @@ def discover(persistent_root):
         record=latest(p.parent)
         if record:result.append({'name':p.parent.name,'snapshot':record['id'],'created_unix':record['created_unix'],'progress':record.get('progress')})
     return result
+
+
+from .training_settings import apply_training_settings

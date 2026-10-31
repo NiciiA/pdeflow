@@ -923,3 +923,12 @@ at the same effective32, FP32 and immutable dependencies. CPU full-gradient
 comparisons cover all four field objectives and A2/B; no actual T4 speed/memory
 or CUDA FP16 verification is claimed. Packaging/preservation checks are recorded
 separately at completion, with no full training or existing artifact alteration.
+
+## Batch application workflow —31 October2026
+
+See [batch-settings.md](batch-settings.md) and outputs/batch-settings-20261031/:
+shared configure/apply API, actual worker metadata, per-stage/remainder tests,
+subprocess benchmark isolation, budget/skip/scheduler/resume, real seven-cell local
+notebook chain, frontend checks and actual rendered MPS benchmark/apply/training.
+CUDA/actual Colab/Drive and1024 memory fit remain unverified. OOM/overflow mocks are
+labelled as control tests. Scientific artifacts are covered by before/after hashes.

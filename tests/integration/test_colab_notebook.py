@@ -7,10 +7,10 @@ import pytest
 def test_notebook_structure():
     n=json.loads(Path('notebooks/colab.ipynb').read_text())
     assert n['nbformat']==4 and n['metadata']['accelerator']=='GPU'
-    code=[c for c in n['cells'] if c['cell_type']=='code'];assert len(code)==6
+    code=[c for c in n['cells'] if c['cell_type']=='code'];assert len(code)==7
     for i,c in enumerate(code):
         compile(''.join(c['source']),f'cell-{i}','exec');assert c['outputs']==[] and c['execution_count'] is None
-    assert 'RUN_TRAINING = False' in ''.join(code[4]['source'])
+    assert 'RUN_TRAINING = False' in ''.join(code[5]['source'])
     assert 'from pdeflow.colab import training_preset' in ''.join(code[2]['source'])
 
 
@@ -39,12 +39,20 @@ def test_real_run_all_source_archive_setup_profile_train_export(tmp_path):
       'OVERRIDE_FAILED_GATE = False':'OVERRIDE_FAILED_GATE = True',
       'ALLOW_CPU_PIPELINE_CHECK = False':'ALLOW_CPU_PIPELINE_CHECK = True',
       'RUN_TRAINING = False':'RUN_TRAINING = True',
+      'EFFECTIVE_BATCH = 8':'EFFECTIVE_BATCH = 2',
+      'FIXED_EFFECTIVE_BATCH = 2':'FIXED_EFFECTIVE_BATCH = 4',
+      'RUN_BATCH_EXPERIMENT = False':'RUN_BATCH_EXPERIMENT = True',
+      'CANDIDATE_MODE = "Auto"':'CANDIDATE_MODE = "Editable"',
+      'MICROBATCH_CANDIDATES = "8,16,32,64,128,256,512,1024"':'MICROBATCH_CANDIDATES = "1,2"',
+      'RUN_IN_BACKGROUND = True':'RUN_IN_BACKGROUND = False',
+      'APPLY_SELECTED_BATCH_SETTINGS = False':'APPLY_SELECTED_BATCH_SETTINGS = True',
       'DOWNLOAD_MODEL = True':'DOWNLOAD_MODEL = False'}
     script='';executed=[]
     for i,cell in enumerate(cells):
         for before,after in replacements.items():cell=cell.replace(before,after)
         executed.append(cell)
         script+=f'print("EXECUTING NOTEBOOK CELL {i+1}",flush=True)\n'+cell+'\n'
+    script+='assert session.c.batch_size == 4\nassert read_json(session.root / "applied-settings.json")["config"]["batch_size"] == 4\n'
     script+='assert (session.root / "export/coordinate.pt").exists()\nassert outcome["state"] == "completed"\n'
     # Real repeated setup after model imports must reuse the same source safely.
     script+=f'exec({executed[0]!r})\n'
@@ -56,4 +64,4 @@ def test_real_run_all_source_archive_setup_profile_train_export(tmp_path):
     (evidence/'notebook-run-all.log').write_text(result.stdout+'\nSTDERR\n'+result.stderr)
     assert result.returncode==0,result.stdout[-3000:]+result.stderr[-5000:]
     shutil.copytree(tmp_path/'fast/cpu-notebook',evidence/'notebook-run',dirs_exist_ok=True)
-    assert 'EXECUTING NOTEBOOK CELL 6' in result.stdout and 'Workflow: completed' in result.stdout
+    assert 'EXECUTING NOTEBOOK CELL 7' in result.stdout and 'Workflow: completed' in result.stdout
