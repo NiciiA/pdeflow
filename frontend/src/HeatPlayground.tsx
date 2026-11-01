@@ -1,3 +1,6 @@
+import { MeasurementTimes, MeasurementSummary } from "./MeasurementTimes";
+import { temporalPayload } from "./measurementTimeConfig";
+import type { TimeControls } from "./measurementTimeConfig";
 import { ReconstructionDiagnostics } from "./ReconstructionDiagnostics";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -22,7 +25,6 @@ import {
   download,
   interpolateFrames,
   physicalPoint,
-  samplingTimes,
 } from "./heat";
 import type {
   HeatConfig,
@@ -138,7 +140,7 @@ export default function HeatPlayground() {
     [rows, setRows] = useState<Point[]>([]),
     [sampling, setSampling] = useState(false),
     [sampleRecord, setSampleRecord] = useState<unknown>(null),
-    [pattern, setPattern] = useState("current"),
+    [pattern, setPattern] = useState("continuous"),
     [manual, setManual] = useState<number[][]>([]),
     [placement, setPlacement] = useState("random"),
     [backgroundFraction, setBackgroundFraction] = useState(0.25),
@@ -153,6 +155,26 @@ export default function HeatPlayground() {
     [manualValue, setManualValue] = useState(0),
     [placing, setPlacing] = useState(false),
     [pointsOnly, setPointsOnly] = useState(false);
+  const [measurementTimes, setMeasurementTimes] = useState<TimeControls>({
+    start: 0,
+    end: cfg.end,
+    manual: 0,
+    mixture: false,
+    early: 0.25,
+    initial: 0.1,
+    counts: "",
+  });
+  const [showOtherTimes, setShowOtherTimes] = useState(true);
+  const [sensorTolerance, setSensorTolerance] = useState(0.025);
+  const timePayload = useMemo(
+    () => temporalPayload(pattern, selectedTimes, measurementTimes),
+    [pattern, selectedTimes, measurementTimes],
+  );
+  const resolvedCount =
+    pattern === "chosen" && timePayload.time_counts.length
+      ? timePayload.time_counts.reduce((a, b) => a + b, 0)
+      : count;
+  const timeKey = JSON.stringify(measurementTimes);
   const [inferDiffusivity, setInferDiffusivity] = useState(false);
   const [models, setModels] = useState<HeatModel[]>([]),
     [model, setModel] = useState(""),
@@ -329,7 +351,7 @@ export default function HeatPlayground() {
     measurementQuantity,
     count,
     sampleSeed,
-    physicalTime,
+    timeKey,
     pattern,
     placement,
     backgroundFraction,
@@ -406,15 +428,15 @@ export default function HeatPlayground() {
         {
           reference_id: reference.id,
           quantity: measurementQuantity,
-          count,
+          count: resolvedCount,
           noise: 0,
           seed: sampleSeed,
-          time: physicalTime,
+          time: measurementTimes.manual,
           pattern,
+          ...timePayload,
           placement,
           background: backgroundFraction,
           spread: focusSpread,
-          times: pattern === "current" ? [] : samplingTimes(selectedTimes),
           adaptive,
         },
         controller.signal,
@@ -448,10 +470,14 @@ export default function HeatPlayground() {
     pending,
     pointsOnly,
     candidateKey,
+    timePayload,
+    measurementTimes.manual,
+    timeKey,
+    resolvedCount,
     measurementQuantity,
     count,
     sampleSeed,
-    physicalTime,
+    timeKey,
     pattern,
     placement,
     backgroundFraction,
@@ -464,7 +490,7 @@ export default function HeatPlayground() {
     sampleEpoch.current++;
     sampleController.current?.abort();
   }, [
-    physicalTime,
+    timeKey,
     placement,
     backgroundFraction,
     focusSpread,
@@ -807,7 +833,7 @@ export default function HeatPlayground() {
     const controller = new AbortController();
     sampleController.current = controller;
     const seed = sampleSeed + (resample ? 1 : 0);
-    const total = placement === "manual" ? manual.length : count;
+    const total = placement === "manual" ? manual.length : resolvedCount;
     if (total < 1) {
       setError("Add at least one sensor point.");
       return;
@@ -825,13 +851,14 @@ export default function HeatPlayground() {
           count: total,
           noise,
           seed,
-          time: physicalTime,
-          pattern,
-          positions: manual,
+          time: measurementTimes.manual,
+          pattern: placement === "manual" ? "timestamped_manual" : pattern,
+          ...timePayload,
+          positions: manual.map((p) => p.slice(0, 2)),
+          position_times: manual.map((p) => p[2]),
           placement,
           background: backgroundFraction,
           spread: focusSpread,
-          times: pattern === "current" ? [] : samplingTimes(selectedTimes),
           adaptive,
         },
         controller.signal,
@@ -899,11 +926,11 @@ export default function HeatPlayground() {
             Math.hypot(
               (p[0] - point[0]) / cfg.lengths[0],
               (p[1] - point[1]) / cfg.lengths[1],
-            ) < 0.025,
+            ) < 0.025 && Math.abs(p[2] - measurementTimes.manual) < 1e-9,
         );
         return nearby >= 0
           ? old.filter((_, i) => i !== nearby)
-          : [...old, point];
+          : [...old, [...point, measurementTimes.manual]];
       });
       return;
     }
@@ -1462,8 +1489,11 @@ export default function HeatPlayground() {
                         sampleEpoch.current++;
                         setSampling(false);
                         invalidateResult();
-                        if (id === "manual" || pattern === "manual")
-                          setPattern("current");
+                        if (id === "manual")
+                          setMeasurementTimes((v) => ({
+                            ...v,
+                            manual: physicalTime,
+                          }));
                         if (id === "manual") setAdaptive(false);
                         setPlacement(id);
                         setPlacing(id === "manual");
@@ -1483,9 +1513,48 @@ export default function HeatPlayground() {
                         ? "Place more points near strong heat features while keeping some background coverage."
                         : "Choose measurement locations directly. Drawing is paused while placing sensors."}
                 </small>
-                <p>
-                  Sampling time: <b>{physicalTime.toFixed(3)}</b>
-                </p>
+                <MeasurementTimes
+                  mode={pattern}
+                  onMode={setPattern}
+                  value={measurementTimes}
+                  onChange={setMeasurementTimes}
+                  times={selectedTimes}
+                  onTimes={setSelectedTimes}
+                  total={placement === "manual" ? manual.length : count}
+                  support={cfg.end}
+                  manual={placement === "manual"}
+                />
+                <MeasurementSummary
+                  rows={rows}
+                  end={cfg.end}
+                  policy={
+                    sampleRecord &&
+                    typeof sampleRecord === "object" &&
+                    "pattern" in sampleRecord
+                      ? String(sampleRecord.pattern)
+                      : "Imported known timestamps"
+                  }
+                />
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={showOtherTimes}
+                    onChange={(e) => setShowOtherTimes(e.target.checked)}
+                  />
+                  Show other-time sensors faded
+                </label>
+                <Numeric
+                  label="Sensor time highlight tolerance"
+                  value={sensorTolerance}
+                  onChange={setSensorTolerance}
+                  min={0}
+                  max={cfg.end}
+                  step={0.001}
+                />
+                <small>
+                  Highlight |sensor time − display time| ≤ {sensorTolerance}.
+                  Every stored timestamp remains fixed.
+                </small>
                 {!pending &&
                   !pointsOnly &&
                   candidateIdentity === candidateKey &&
@@ -1534,7 +1603,10 @@ export default function HeatPlayground() {
                       />
                       <button
                         onClick={() =>
-                          setManual((p) => [...p, [manualX, manualY]])
+                          setManual((p) => [
+                            ...p,
+                            [manualX, manualY, measurementTimes.manual],
+                          ])
                         }
                       >
                         Add sensor point
@@ -1767,6 +1839,8 @@ export default function HeatPlayground() {
                         profileScales={profileScales}
                         range={comparisonRange}
                         points={rows.filter((r) => r.field === quantity)}
+                        showOtherTimes={showOtherTimes}
+                        timeTolerance={sensorTolerance}
                         time={physicalTime}
                         lengths={plotLengths}
                         origins={plotOrigins}
@@ -1789,6 +1863,8 @@ export default function HeatPlayground() {
                       profileScales={profileScales}
                       range={comparisonRange}
                       points={rows.filter((r) => r.field === quantity)}
+                      showOtherTimes={showOtherTimes}
+                      timeTolerance={sensorTolerance}
                       time={physicalTime}
                       lengths={plotLengths}
                       origins={plotOrigins}
@@ -1810,6 +1886,8 @@ export default function HeatPlayground() {
                           showRegions ? currentMetrics?.labels : undefined
                         }
                         points={rows.filter((r) => r.field === quantity)}
+                        showOtherTimes={showOtherTimes}
+                        timeTolerance={sensorTolerance}
                         time={physicalTime}
                         lengths={plotLengths}
                         origins={plotOrigins}
@@ -1962,6 +2040,8 @@ export default function HeatPlayground() {
                     }
                     range={pointsOnly ? [0, 1] : displayRange}
                     points={rows.filter((r) => r.field === quantity)}
+                    showOtherTimes={showOtherTimes}
+                    timeTolerance={sensorTolerance}
                     time={physicalTime}
                     lengths={plotLengths}
                     origins={plotOrigins}
@@ -2313,54 +2393,6 @@ export default function HeatPlayground() {
                   max={1}
                   step={0.05}
                 />
-                <label>
-                  Chosen physical times
-                  <input
-                    aria-label="Chosen physical times"
-                    value={selectedTimes}
-                    onChange={(e) => setSelectedTimes(e.target.value)}
-                  />
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={adaptive}
-                    onChange={(e) => setAdaptive(e.target.checked)}
-                  />
-                  Time-adaptive positions (across chosen times only)
-                </label>
-                <p>
-                  N is the total scalar count. Fixed sensors keep their
-                  locations, designed at the current time; a partial final time
-                  cycle is allowed. Purple hollow markers are candidates; white
-                  dots are committed measurements. Heat focus uses reference
-                  contrast, including cold regions, so positions convey
-                  reference information.
-                </p>
-                <label>
-                  Pattern
-                  <select
-                    aria-label="Measurement pattern"
-                    value={pattern}
-                    onChange={(e) => {
-                      setPattern(e.target.value);
-                      setPlacing(e.target.value === "manual");
-                      if (e.target.value === "manual") setPlacement("manual");
-                      sampleEpoch.current++;
-                    }}
-                  >
-                    <option value="current">N at current physical time</option>
-                    <option value="across">
-                      N total across chosen / continuous times
-                    </option>
-                    <option value="fixed">
-                      N total, fixed sensors over time
-                    </option>
-                    <option value="manual">
-                      N manual points at current time
-                    </option>
-                  </select>
-                </label>
                 {
                   <Numeric
                     label={"Measurement seed"}
@@ -2382,6 +2414,10 @@ export default function HeatPlayground() {
                       setPointsOnly(e.target.checked);
                       if (e.target.checked) {
                         setPlacement("random");
+                        setMeasurementTimes((v) => ({
+                          ...v,
+                          manual: physicalTime,
+                        }));
                         setPlacing(false);
                       }
                       invalidateRows();
@@ -2391,6 +2427,16 @@ export default function HeatPlayground() {
                 </label>
                 {pointsOnly && (
                   <div>
+                    <Numeric
+                      label="Observed measurement time"
+                      value={measurementTimes.manual}
+                      onChange={(v) =>
+                        setMeasurementTimes((t) => ({ ...t, manual: v }))
+                      }
+                      min={0}
+                      max={cfg.end}
+                      step={0.001}
+                    />
                     <Numeric
                       label="Observed value"
                       value={manualValue}
@@ -2420,7 +2466,7 @@ export default function HeatPlayground() {
                             field: measurementQuantity,
                             x: manualX,
                             y: manualY,
-                            time: physicalTime,
+                            time: measurementTimes.manual,
                             value: manualValue,
                             sigma: noise,
                           },
@@ -2465,7 +2511,9 @@ export default function HeatPlayground() {
                             r.length > 2000 ||
                             r.some(
                               (p) =>
-                                p.field !== "u" ||
+                                !(
+                                  cfg.family === "wave" ? ["u", "v"] : ["u"]
+                                ).includes(p.field) ||
                                 p.time < 0 ||
                                 p.time > cfg.end ||
                                 p.sigma < 0 ||
@@ -2479,7 +2527,7 @@ export default function HeatPlayground() {
                             )
                           )
                             throw new Error(
-                              "Import 1–2000 scalar u observations with finite x, y, time, value and sigma.",
+                              "Import 1–2000 supported scalar observations with quantity, finite x, y, time, value and sigma.",
                             );
                           invalidateRows();
                           setRows(r);
@@ -2532,8 +2580,8 @@ export default function HeatPlayground() {
                 <p>
                   Locations/noise use independent seeded streams. Clean values
                   remain evaluation-only on disk. Scrubbing never changes saved
-                  observations. Dots show observations at the displayed physical
-                  time.
+                  observations. Dots highlight observations near the displayed
+                  physical time.
                 </p>
               </section>
               <section>

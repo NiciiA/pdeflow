@@ -945,3 +945,27 @@ The standard path removes only regional analysis/query/cache work, not domain
 queries or their distribution. The choice affects A1 and decoded A2 only; B FM,
 likelihood, physics and displayed metrics remain distinct. Detailed compatibility
 and exact selection commands: standard-mse-workflow.md.
+
+### Continuous known measurement times and A2 diagnostics
+
+A sensor is o_j=(x_j,t_j,q_j,y_j,sigma_j), y_j=u_q(x_j,t_j)+epsilon_j,
+epsilon_j~N(0,sigma_j²). t_j is supplied information. New B whole-interval policy
+uses t_j=a+(b-a)(j+U_j)/N, U_j~Uniform[0,1), followed by a random permutation.
+N is total observations, not per time. For an optional recorded mixture, first
+sample multinomial counts (whole, log-uniform early, exact t=0); whole weight>0.
+The exact-zero component requires a=0; shifted intervals reject that component.
+Reference targets use original t_j, not the bounded placement-analysis map times.
+Wave v has its own quantity and global normalization. Masked sensors do not enter
+set attention or endpoint likelihood. Frozen E/T/D weights do not detach generated
+endpoint gradients. No latent-token region weighting or FM change was introduced.
+
+A2 reference targets already evaluate continuous actual ta/tb, with explicit t=0
+identity, early log-uniform and randomized whole-interval strata. Its default
+25/35/35/5 initial/early/uniform/final mix remains independent from B. Report both
+distributions, not merely acceptance of a time input. A2 audit relative L2 divides
+by sqrt(max(mean(reference²),(training_quantity_scale*1e-6)²)). Compare learned
+T(E(initial),t) against the SAME frozen initial encoding held constant. Reencoding
+reference(t) is diagnostic, not a rigorous representation-error lower bound. The
+fixed-time aggregate uses trapezoidal time weights, and individual physical metrics
+remain available. Spectral power0 is phase-preserving grid MSE by Parseval, not
+frequency-selective supervision. See measurement-times.md and a2-investigation.md.

@@ -95,7 +95,7 @@ def test_api_exact_time_placement_noise_multitime_metadata_and_manual(tmp_path):
     root=tmp_path/'refs';root.mkdir();r=reference(Heat(preset='two'),root)
     base=dict(reference_id=r['id'],count=25,time=.237,seed=4)
     for policy in ('random','even','heat'):
-        spec=Measurements(**base,placement=policy);candidate=candidates(spec,root);a=measurements(spec,root);b=measurements(Measurements(**base,placement=policy,noise=.1),root)
+        spec=Measurements(**base,placement=policy,pattern="current");candidate=candidates(spec,root);a=measurements(spec,root);b=measurements(Measurements(**base,placement=policy,noise=.1,pattern="current"),root)
         assert len(a['rows'])==25 and all(row['time']==.237 for row in a['rows'])
         assert [[row['x'],row['y']] for row in a['rows']]==candidate['positions']==[[row['x'],row['y']] for row in b['rows']]
         assert a['placement']['reference_assisted']==(policy=='heat') and a['placement']['design_time']==.237
@@ -109,8 +109,8 @@ def test_api_exact_time_placement_noise_multitime_metadata_and_manual(tmp_path):
     assert len({(p['x'],p['y']) for p in fixed['rows']})==9
     with pytest.raises(ValueError,match='Fixed sensors'):candidates(Measurements(**base,pattern='fixed',adaptive=True),root)
     adaptive=measurements(Measurements(**base,placement='heat',pattern='across',times=[0,.237,1],adaptive=True),root);assert len(adaptive['rows'])==25 and adaptive['placement']['time_adaptive'] and len(adaptive['placement']['time_designs'])==3
-    manual=measurements(Measurements(**{**base,'count':2},placement='manual',positions=[[.1,.2],[.3,.4]]),root);assert len(manual['rows'])==2
-    with pytest.raises(ValueError):measurements(Measurements(**base,placement='manual',positions=[[1,.5]]),root)
+    manual=measurements(Measurements(**{**base,'count':2},pattern='current',placement='manual',positions=[[.1,.2],[.3,.4]]),root);assert len(manual['rows'])==2
+    with pytest.raises(ValueError):measurements(Measurements(**base,pattern='current',placement='manual',positions=[[1,.5]]),root)
     c=config();validate_rows(c,manual['rows']);assert validate_rows(c,[{**manual['rows'][0],'time':.237}])[0][0,-1]==pytest.approx(.237)
     with pytest.raises(ValueError):validate_rows(c,[{**manual['rows'][0],'time':1.01}])
     with TestClient(create_app(workspace=tmp_path/'api')) as client:

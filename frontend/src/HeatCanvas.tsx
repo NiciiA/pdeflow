@@ -21,6 +21,8 @@ export function HeatCanvas({
   label,
   points = [],
   time = 0,
+  timeTolerance = 0.025,
+  showOtherTimes = true,
   lengths = [1, 1],
   origins = [0, 0],
   onPoint,
@@ -42,6 +44,8 @@ export function HeatCanvas({
   label: string;
   points?: Point[];
   time?: number;
+  timeTolerance?: number;
+  showOtherTimes?: boolean;
   lengths?: number[];
   origins?: number[];
   onPoint?: (x: number, y: number) => void;
@@ -171,23 +175,38 @@ export function HeatCanvas({
         ctx.stroke();
         ctx.setLineDash([]);
       }
-      for (const p of points.filter((p) => Math.abs(p.time - time) < 1e-7)) {
+      for (const p of points.filter(
+        (p) => showOtherTimes || Math.abs(p.time - time) <= timeTolerance,
+      )) {
         const x = ((p.x - origins[0]) / lengths[0]) * c.width,
           y = (1 - (p.y - origins[1]) / lengths[1]) * c.height;
         ctx.beginPath();
         ctx.arc(x, y, 3.5 * dpr, 0, 2 * Math.PI);
+        ctx.globalAlpha = Math.abs(p.time - time) <= timeTolerance ? 1 : 0.22;
         ctx.fillStyle = "#fff";
         ctx.fill();
         ctx.lineWidth = 1.4 * dpr;
         ctx.strokeStyle = "#172435";
         ctx.stroke();
+        ctx.globalAlpha = 1;
       }
     };
     draw();
     const resize = new ResizeObserver(draw);
     resize.observe(c);
     return () => resize.disconnect();
-  }, [values, range, points, time, lengths, origins, candidates, regions]);
+  }, [
+    values,
+    range,
+    points,
+    time,
+    timeTolerance,
+    showOtherTimes,
+    lengths,
+    origins,
+    candidates,
+    regions,
+  ]);
   function point(e: PointerEvent<HTMLCanvasElement>) {
     const r = e.currentTarget.getBoundingClientRect();
     onPoint?.(
@@ -235,6 +254,22 @@ export function HeatCanvas({
               point(e);
             }}
             onPointerMove={(e) => {
+              const box = e.currentTarget.getBoundingClientRect();
+              const fx = (e.clientX - box.left) / box.width,
+                fy = 1 - (e.clientY - box.top) / box.height;
+              const sensor = points.find(
+                (p) =>
+                  (showOtherTimes ||
+                    Math.abs(p.time - time) <= timeTolerance) &&
+                  Math.hypot(
+                    (p.x - origins[0]) / lengths[0] - fx,
+                    (p.y - origins[1]) / lengths[1] - fy,
+                  ) < 0.025,
+              );
+              e.currentTarget.title = sensor
+                ? `${sensor.field} at (${sensor.x}, ${sensor.y}), physical time ${sensor.time}; value ${sensor.value}, σ ${sensor.sigma}. Opacity indicates temporal distance only.`
+                : label;
+
               if (down.current && !discrete) point(e);
               else if (showProfiles && !onPoint) {
                 const r = e.currentTarget.getBoundingClientRect();

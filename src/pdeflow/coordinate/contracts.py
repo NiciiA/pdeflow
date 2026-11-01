@@ -37,6 +37,7 @@ class CoordinateConfig:
     temporal_mode: str = 'continuous'
     time_interval: tuple[float,float] = (0.,1.)
     time_sampling: dict = field(default_factory=dict)
+    observation_time: dict = field(default_factory=dict)
     observation_placement: dict = field(default_factory=dict)
     animation_frames: int = 31
     data_mode: str = 'procedural'
@@ -64,6 +65,8 @@ class CoordinateConfig:
             if len(self.time_interval)!=2 or not np.isfinite(self.time_interval).all() or self.time_interval[0]!=0 or not 0<self.time_interval[1]<=5:raise ValueError('Continuous physical interval must start at0 and end in (0,5]')
             from .temporal import policies
             policies(self)
+            from pdeflow.observation_times import settings as observation_settings
+            object.__setattr__(self,"observation_time",observation_settings(self.observation_time))
             placement=self.observation_placement or {'random':.5,'even':.25,'heat':.25}
             if set(placement)-{'random','even','heat'} or not placement or not all(np.isfinite(v) and v>=0 for v in placement.values()) or not np.isclose(sum(placement.values()),1):raise ValueError('Observation-placement mixture must sum to one over random/even/heat')
         from pdeflow.core import DomainSpec
@@ -80,7 +83,8 @@ class CoordinateConfig:
         if self.temporal_mode!='continuous' or self.data_mode!='procedural' or self.dimension!=2:raise ValueError('Operator v2 requires continuous procedural periodic2D; old trajectory models are incompatible')
         if not self.family_weights or set(self.family_weights)-{'heat','wave'} or any(not math.isfinite(v) or v<=0 for v in self.family_weights.values()):raise ValueError('Positive family weights over heat/wave required')
         if not all(math.isfinite(v) for v in self.wave_speed_range) or not 0<self.wave_speed_range[0]<self.wave_speed_range[1] or type(self.evolution_steps)!=int or self.evolution_steps<1:raise ValueError('Positive finite bounded wave speed range and evolution budget required')
-        if set(self.evolution)-{'depth','graph_depth','latent_weight','composition_weight','physics'}:raise ValueError('Unknown evolution settings')
+        if set(self.evolution)-{'depth','graph_depth','latent_weight','composition_weight','physics','time_policy'}:raise ValueError('Unknown evolution settings')
+        if self.evolution.get('time_policy','legacy_query_v1') not in ('legacy_query_v1','nonzero_conditioned_v1'):raise ValueError('Unknown A2 time policy')
         from .evolution_objective import physics_settings
         physics_settings(self.evolution.get('physics'))
         if any(type(self.evolution.get(k,1))!=int or self.evolution.get(k,1)<1 for k in ('depth','graph_depth')) or any(not math.isfinite(self.evolution.get(k,0.)) or self.evolution.get(k,0.)<0 for k in ('latent_weight','composition_weight')):raise ValueError('Invalid evolution depth/loss weights')

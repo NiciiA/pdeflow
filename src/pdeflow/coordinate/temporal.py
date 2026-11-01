@@ -47,8 +47,17 @@ def capability(c):
             'validated_temporal_accuracy':False,'meaning':'Training-support declaration, not demonstrated temporal interpolation accuracy'}
 
 
-def state_time(c,iteration,g,role='query'):
+def state_time(c,iteration,g,role='query',condition_nonzero=False):
     """Recorded initial/early/uniform/final mixture; uniform part uses32 jittered strata."""
-    policy=policies(c);weights=policy[role];kind=list(weights)[int(torch.multinomial(torch.tensor(list(weights.values())),1,generator=g))];r=float(torch.rand((),generator=g))
+    policy=policies(c);weights=policy[role]
+    if condition_nonzero:
+        total=sum(v for k,v in weights.items() if k!='initial');weights={k:(v/total if k!='initial' else 0.) for k,v in weights.items()}
+    kind=list(weights)[int(torch.multinomial(torch.tensor(list(weights.values())),1,generator=g))];r=float(torch.rand((),generator=g))
     fraction=0. if kind=='initial' else 1. if kind=='final' else float(np.exp(np.log(policy['early_min'])+r*np.log(policy['early_max']/policy['early_min']))) if kind=='early' else (iteration%32+r)/32
+    if condition_nonzero:fraction=max(fraction,torch.finfo(torch.float32).eps)
     return c.interval[0]+fraction*(c.interval[1]-c.interval[0])
+
+
+def evolution_time(c,iteration,g):
+    """Opt-in NEW A2 experiment; default preserves the historical RNG path."""
+    return state_time(c,iteration,g,'query',c.evolution.get('time_policy','legacy_query_v1')=='nonzero_conditioned_v1')

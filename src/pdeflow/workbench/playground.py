@@ -112,7 +112,10 @@ def reference(spec: Heat, root: Path):
 def _reference(root,identifier):
     from pdeflow.reference import load
     from pdeflow.numerics.dynamic import SpectralState
-    p,v,_=load(contained(Path(root),identifier))
+    p,v,manifest=load(contained(Path(root),identifier))
+    solver_name=manifest.get('diagnostics',{}).get('solver','')
+    if solver_name not in ('periodic_spectral_heat_v2','periodic_spectral_wave_v2'):
+        raise ValueError('This reference has no declared continuous-time evaluator. Imported/static fields are not trajectories; use a spectral dynamic reference or explicitly validated temporal interpolation.')
     if p.family not in ('heat','wave') or p.grid.dimension!=2:raise ValueError('Choose registered heat/wave2D reference')
     return p,SpectralState(v[0,0,0],v[0,1,0] if p.family=='wave' else None,p.grid.domain.lengths,p.grid.domain.origins,p.family)
 
@@ -137,8 +140,13 @@ class Measurements(BaseModel):
     count: int = Field(default=50,ge=1,le=2000)
     noise: float = Field(default=0,ge=0,le=100)
     seed: int = Field(default=91,ge=0,lt=2**32)
-    time: float
-    pattern: str = 'current'
+    time: float = 0.
+    pattern: str = 'continuous'
+    start: float | None = None
+    end: float | None = None
+    temporal_policy: dict = Field(default_factory=dict)
+    time_counts: list[int] = Field(default_factory=list,max_length=100)
+    position_times: list[float] = Field(default_factory=list,max_length=2000)
     placement: str = 'random'
     background: float = Field(default=.25,ge=.1,le=1)
     spread: float = Field(default=.08,ge=.04,le=.4)
@@ -154,7 +162,28 @@ def candidates(spec: Measurements,root:Path):
     p,solver=_reference(str(root),spec.reference_id);g=p.grid;interval=(0.,g.times[-1])
     if spec.quantity not in ('u','v') or spec.quantity=='v' and p.family!='wave':raise ValueError('Selected observation quantity absent from state')
     t=float(bounded_time(spec.time,interval))
+    if spec.pattern in ('continuous','chosen','timestamped_manual'):
+        from pdeflow.observation_times import continuous,explicit,focused_positions,settings,summary
+        start=interval[0] if spec.start is None else spec.start;end=interval[1] if spec.end is None else spec.end
+        if not interval[0]<=start<end<=interval[1]:raise ValueError('Measurement interval must lie inside reference/model support')
+        policy='manual' if spec.pattern=='timestamped_manual' else spec.placement
+        temporal=settings(spec.temporal_policy)
+        if spec.pattern=='timestamped_manual':
+            times=np.asarray(spec.position_times,dtype=float)
+            if len(times)!=spec.count or len(spec.positions)!=spec.count or not np.isfinite(times).all() or np.any(times<interval[0]) or np.any(times>interval[1]):raise ValueError('Every manual sensor requires its own known timestamp inside reference support')
+            xy=np.asarray(spec.positions,dtype=float)
+            if xy.shape!=(spec.count,2) or not np.isfinite(xy).all() or np.any(xy<np.array(g.domain.origins)) or np.any(xy>=np.array(g.domain.origins)+g.domain.lengths):raise ValueError('Manual coordinates must lie in the periodic endpoint-excluded domain')
+            metadata={'reference_assisted':False,'policy':'manual'}
+        else:
+            times=continuous(spec.count,(start,end),np.random.default_rng(spec.seed+271),temporal) if spec.pattern=='continuous' else explicit(spec.times,spec.count,interval,spec.time_counts)
+            if spec.pattern=='chosen':times=np.random.default_rng(spec.seed+272).permutation(times)
+            def at(count,t,k):return place(count,policy,spec.seed+k,g.domain.lengths,g.domain.origins,field=_analysis(str(root),spec.reference_id,t,spec.quantity),background=spec.background,spread=spec.spread,minimum_distance=spec.minimum_distance)
+            if policy=='heat':xy,metadata=focused_positions(times,interval,temporal['placement_groups'],at)
+            else:xy,metadata=place(spec.count,policy,spec.seed,g.domain.lengths,g.domain.origins,background=spec.background,spread=spec.spread,minimum_distance=spec.minimum_distance)
+        metadata.update(reference_id=spec.reference_id,time_policy=spec.pattern,temporal_configuration=temporal if spec.pattern=='continuous' else {'times':spec.times,'counts':spec.time_counts,'allocation':'per-time counts' if spec.time_counts else 'distribute TOTAL cyclically'} if spec.pattern=='chosen' else {'policy':'each manual timestamp retained'},measurement_interval=[start,end],time_summary=summary(times,interval),spatial_sensors=len(set(map(tuple,xy))),sampled_times=len(set(times)),total_scalar_observations=spec.count)
+        return {'positions':xy.tolist(),'times':times.tolist(),'placement':metadata}
     if spec.pattern not in ('current','across','fixed','manual'):raise ValueError('Unknown time sampling pattern')
+    if 'time' not in spec.model_fields_set:raise ValueError('Legacy single-time/design mode requires an explicit physical time; no missing time is assigned t=0')
     selected=bounded_time(spec.times,interval) if spec.times else np.array([0.,interval[1]/2,interval[1]])
     if len(set(selected))!=len(selected):raise ValueError('Choose distinct physical measurement times')
     policy='manual' if spec.pattern=='manual' else spec.placement
@@ -190,7 +219,7 @@ def measurements(spec: Measurements,root:Path):
     noise=np.random.default_rng(np.random.SeedSequence([spec.seed,983]));noisy=clean+noise.normal(size=spec.count)*spec.noise
     rows=[{'field':spec.quantity,'x':float(x),'y':float(y),'time':float(t),'value':float(v),'sigma':spec.noise} for (x,y),t,v in zip(xy,times,noisy)]
     identifier=uuid.uuid4().hex;directory=contained(root,spec.reference_id)/'samplings'/identifier;directory.mkdir(parents=True)
-    record={'id':identifier,'count':spec.count,'rows':rows,'seed':spec.seed,'noise_std':spec.noise,'reference_id':spec.reference_id,'pattern':spec.pattern,'placement':design['placement'],
+    record={'id':identifier,'count':spec.count,'rows':rows,'seed':spec.seed,'noise_std':spec.noise,'reference_id':spec.reference_id,'pattern':spec.pattern,'placement':design['placement'],'time_summary':__import__('pdeflow.observation_times',fromlist=['summary']).summary(times,(0.,p.grid.times[-1])),
             'definition':'N total scalar observations at actual floating physical times; finite Fourier reference, independent absolute Gaussian noise; selection separate from values'}
     write_json(directory/'rows.json',rows);write_json(directory/'sampling.json',record)
     atomic_write(directory/'clean-evaluation-only.npz',lambda f:np.savez_compressed(f,clean=clean))

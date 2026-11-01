@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 from .dataset import state_samples_batch
-from .temporal import state_time
+from .temporal import state_time,evolution_time
 from .physics import family_index
 from .joint import active_mask,options as joint_options
 from .training import normalized_parameter
@@ -23,7 +23,7 @@ class StatePlan:
 def plans(c,items,g,iteration,stage,norms,cache,timings,item_quantity,grouped_queries):
     rows=[]
     for i,item in enumerate(items):
-        phase=state_time(c,iteration+i,g,'query')
+        phase=evolution_time(c,iteration+i,g) if stage=='evolution' else state_time(c,iteration+i,g,'query')
         if stage=='autoencoder':ta=state_time(c,iteration+i,g,'encoder');tb=ta;tm=ta
         else:
             tb=phase;ta=float(torch.rand((),generator=g))*tb if (iteration+i)%2 else 0.;tm=(ta+tb)/2
@@ -37,7 +37,9 @@ def plans(c,items,g,iteration,stage,norms,cache,timings,item_quantity,grouped_qu
     return rows
 
 
-def forward(c,ae,rows,stage,norms,device,timings,frozen,differentiable_loss,item_quantity,components):
+def forward(c,ae,rows,stage,norms,device,timings,frozen,differentiable_loss,item_quantity,components,return_parts=False):
+    from .evolution_telemetry import record,time_rows
+    if stage=='evolution':time_rows(components,rows,c.interval[1])
     items=[r.item for r in rows];n=len(items)
     with timings.measure('transfer',host=True):
         f=torch.tensor([family_index(x['family']) for x in items],device=device)
@@ -82,11 +84,13 @@ def forward(c,ae,rows,stage,norms,device,timings,frozen,differentiable_loss,item
                 # and equal quantity weighting; forwards are fully batched.
                 item_quantity(rows[i].item,name)
                 loss=differentiable_loss(pred[k:k+1],targets[k:k+1],weights[k:k+1],loss_settings(c.field_loss).type,validate=False)
-                field_losses[i].append(loss);components[rows[i].item['family']+'_'+name]=loss.detach()
+                field_losses[i].append(loss);record(components,rows[i].item['family']+'_'+name,loss)
     field=torch.stack([torch.stack(x).mean() for x in field_losses])
     from .evolution_objective import structured_field_loss,physics_loss
     with timings.measure('spectral_field_compute'):
         extra,info=structured_field_loss(c,ae,field_state,rows,f,norms,device)
+    domain_field=field;spectral_term=extra
+    if stage=='evolution':record(components,'objective_domain_field',field);record(components,'objective_spectral',extra)
     field=field+extra;components.update(info)
     if stage=='autoencoder':
         scalar=(ae.decode_parameter(z,families=f)-p).float().square();components['scalar']=scalar[-1].detach()
@@ -115,4 +119,8 @@ def forward(c,ae,rows,stage,norms,device,timings,frozen,differentiable_loss,item
         for i,r in enumerate(rows):
             extra,info=physics_loss(c,ae,z0[i:i+1],p[i:i+1],known[i:i+1],f[i:i+1],norms,r.seed)
             extras.append(extra[0]);components.update(info)
-    return field+c.evolution.get('latent_weight',.1)*alignment+c.evolution.get('composition_weight',.01)*(composition+physical)+torch.stack(extras)
+    alignment_term=c.evolution.get('latent_weight',.1)*alignment;composition_term=c.evolution.get('composition_weight',.01)*(composition+physical);physics_term=torch.stack(extras)
+    record(components,'objective_alignment',alignment_term);record(components,'objective_composition',composition_term);record(components,'objective_physics',physics_term)
+    loss=field+alignment_term+composition_term+physics_term
+    if return_parts:return loss,{'domain':domain_field,'spectral':spectral_term,'alignment':alignment_term,'composition':composition_term,'physics':physics_term}
+    return loss

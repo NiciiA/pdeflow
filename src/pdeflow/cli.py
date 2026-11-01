@@ -204,6 +204,8 @@ def main():
     p=sub.add_parser('cleanup');p.add_argument('--root');p.add_argument('--register-cache');p.add_argument('--apply');p.add_argument('--confirm');p.add_argument('--preview',action='store_true')
     p=sub.add_parser('pin');p.add_argument('path');p.add_argument('--root');p.add_argument('--unpin',action='store_true')
     p=sub.add_parser('diagnose-learning');p.add_argument('--checkpoint',required=True);p.add_argument('--output',required=True);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda']);p.add_argument('--updates',type=int,default=100);p.add_argument('--cases',type=int,default=2)
+    p=sub.add_parser('evolution-diagnose',help='Fixed held-out A2 versus same encoded initial state held constant; no training')
+    p.add_argument('--checkpoint',required=True);p.add_argument('--output',required=True);p.add_argument('--earlier',action='append',default=[]);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda']);p.add_argument('--per-family',type=int,default=1);p.add_argument('--resolution',type=int,default=16)
     p=sub.add_parser('coordinate-diagnostic-case',help='Capture immutable observations, reference and explicit noise for staged diagnosis')
     p.add_argument('--checkpoint',required=True);p.add_argument('--output',required=True);p.add_argument('--job');p.add_argument('--reference');p.add_argument('--observations');p.add_argument('--problem');p.add_argument('--validation-index',type=int);p.add_argument('--training-observations',action='store_true');p.add_argument('--seed',type=int,default=91);p.add_argument('--steps',type=int,default=8);p.add_argument('--particles',type=int,default=4);p.add_argument('--resolution',type=int,default=32)
     p=sub.add_parser('coordinate-diagnose',help='A1/oracle-A2/B and exact-sensor evaluation, never hidden-reference conditioning')
@@ -233,6 +235,10 @@ def main():
             from pdeflow.coordinate.diagnostics import diagnose
             result=diagnose(args.checkpoint,args.case,args.output,args.device,tuple(args.stages.split(',')),args.evolution,args.representation,args.ablations,tuple(map(int,args.integration_steps.split(','))) if args.integration_steps else ())
             print(json.dumps({'output':str(Path(args.output).resolve()),'seconds':result['seconds'],'stages':{k:v.get('status','evaluated') for k,v in result['stages'].items()}},indent=2));return
+        if args.command=='evolution-diagnose':
+            from pdeflow.coordinate.evolution_audit import diagnose
+            r=diagnose(args.checkpoint,args.output,args.device,args.earlier,args.per_family,args.resolution)
+            print(json.dumps({'output':args.output,'successful_updates':r['successful_updates'],'comparisons':[{k:v for k,v in row.items() if k!='records'} for row in r['comparisons']]},indent=2));return
         if args.command=='coordinate-diagnostic-correct':
             from pdeflow.coordinate.diagnostic_correction import correct
             result=correct(args.checkpoint,args.case,args.output,args.device,args.steps,args.learning_rate,args.prior)

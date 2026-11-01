@@ -922,3 +922,24 @@ the original domain/time RNG and count. Mask zero-weight invalid points before
 subtraction. Version-aware checkpoint resolution preserves recorded/legacy loss
 semantics, rejects ambiguous/conflicting new records, and never inherits a new
 preset on resume. Source checks remain strict. See standard-mse-workflow.md.
+
+### 1 November: independent known sensor-time distribution and A2 reporting
+
+New B runs use randomized stratified continuous whole-interval sensor times. A2
+keeps its declared early/initial/continuous target mix; A1 remains initial state.
+Retain an explicit legacy policy for old engine≤5 absence, reject engine6 ambiguity
+and incompatible resume. Distribution changes require a new experiment. Feature
+placement uses bounded per-quantity reference maps at mean actual times in up to8
+occupied temporal bins, with background coverage; measurement values retain exact
+times. Imported trajectories without declared temporal evaluators are rejected,
+rather than silently evolving only their first frame. No interpolation claim.
+
+Fix A2 stale-A1/t0 previews, rolling-history validation loss, nonreproducible “fixed”
+validation and last-case component reporting. Independent validation RNG/modes are
+restored; current learned nonzero-time preview is training-owner-only. Retain the
+old objective and schedule by default. Nonzero-conditioned A2 target sampling is an
+explicit optional new experiment. Tiny fixed-case learning shows trainability and
+poor representation/endpoint quality, not a remedy demonstrated on the unavailable
+live Colab run. No source reload under active training; use original verified Drive
+snapshot for resume. No scope conflict with project.md: 2D heat/wave remains an
+implemented slice within the larger modular chemistry/1D–3D research goal.

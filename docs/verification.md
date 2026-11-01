@@ -1025,3 +1025,64 @@ checks,37 batched/joint regressions,12 frontend tests,3 actual notebook tests an
 build passed; lint0 errors/3 existing warnings. Exact counts, corrected test-fixture
 assertion, screenshots, preservation/source package and device limits are recorded
 in standard-mse-workflow.md. No substantial training or accuracy claim.
+
+## 1 November: A2 investigation and continuous known measurement times
+
+Saved evidence roots: outputs/a2-investigation-20261101 and
+outputs/measurement-times-20261101. All are execution checks, not scientific
+accuracy validation. No substantial training or CUDA/real Colab execution.
+
+* A2 earlier focused affected run:42 passed,2 CUDA skipped, including actual MPS;
+  final-affected-tests.log. Identical-weight old/new-source validation comparison,
+  bounded fixed-trajectory learning and rendered IPython previews are retained.
+* `MPLBACKEND=Agg .venv/bin/python -m pytest -q tests/test_measurement_times.py
+  tests/test_a2_training_audit.py tests/test_observation_aligned_objectives.py
+  tests/test_batched_training.py
+  tests/integration/test_continuous_heat.py::test_api_exact_time_placement_noise_multitime_metadata_and_manual`:
+  46 passed,4 unavailable-device skips; affected-tests.log.
+* After per-quantity feature-map refinement, test_measurement_times.py plus
+  test_batched_training.py:20 passed,2 unavailable-device skips; final-sampler-tests.log.
+* Final measurement/A2/notebook set:25 passed,2 device skips; final-training-notebook.log.
+  Tiny actual shared A1/A2/B2/2/2 pipeline configuration/history/checkpoints copied
+  from the executed pytest fixture into pipeline-evidence, without retraining.
+* Actual approved MPS test_actual_mps_a2_preview_and_physical_baseline and
+  test_actual_mps_endpoint_and_spectral_gradients:2 passed (mps-tests.log). CPU-only
+  policy checks are never counted as CUDA verification. New timing draws and maps
+  are CPU reference preparation; frozen endpoint gradients execute on MPS here.
+* Frontend existing69 tests and new2 temporal controls tests pass. TypeScript/build
+  and lint are checked; only the three pre-existing UI fast-refresh warnings remain.
+* Real Chromium heat/random-continuous and wave-v/arbitrary chosen-time inference
+  passed against isolated API/Vite, no mocks: browser-final.log and the strengthened
+  browser-diagnostics.log (1 combined journey each). Display .61 preserves rows,
+  produces no measurement regeneration; exact sensor diagnostics retain x/y/t.
+  Screenshots and request/result JSON are saved. Separate manual/count/import journey
+  is recorded in browser-controls evidence/logs.
+
+Preserved failures: initial Mac GUI Matplotlib backend abort (reran with Agg),
+headless Chromium sandbox launch failure (used approved local browser execution),
+new test's component-container assertion corrected, and browser selectors/value
+expectations corrected. No objective was weakened or invalid numerical result hidden.
+See measurement-times.md / a2-investigation.md for formulas and scientific limits.
+
+Final UI continuation: frontend-final.log has71 passing tests; build.log passes
+TypeScript/Vite. lint-final.log has no errors and only the three existing component
+fast-refresh warnings. browser-manual-final.log passes the real explicit-count /
+JSON replay / manual click timestamp check; browser-wave-import-final.log passes
+wave-v import, missing-time rejection and explicit manually entered measurement time.
+The inspector was changed from a horizontally clipped table to readable sensor
+cards and inspected in browser-time-inspector.png. Earlier selector/HTML-number
+format assertion failures are preserved; these were test harness corrections.
+
+preservation.json hashes17,658 pre-existing output files against the original A2
+baseline: none changed or missing. User .idea, tmp and legacy notebook are retained.
+Source ZIP/manifest/fresh extraction and current/legacy checkpoint compatibility
+results are recorded in packaging.json, fresh-package-check.log and compatibility.json.
+Only task-started local API/Vite services are stopped after verification.
+
+Last boundary checks: measurement-final.log has11 passing measurement tests after
+requiring explicit legacy design time and rejecting an exact-t=0 mixture on a
+shifted interval. final-reference-tests.log has4 passing heat/wave/manual/API checks.
+Matching final-source two-update stage checkpoints are in pipeline-final (copied
+from that already-executed fixture); earlier pipeline-evidence is retained.
+Fresh extraction also caught and corrected the diagnostic documentation command:
+use `python -m pdeflow.cli evolution-diagnose`, not `python -m pdeflow`.

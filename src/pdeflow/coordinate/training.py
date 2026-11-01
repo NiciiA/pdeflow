@@ -19,6 +19,9 @@ def checkpoint_config(cp):
         elif cp.get('schema')==SCHEMA and cp.get('engine_version',0)<=4:raw['field_loss']={}  # documented historical MSE/legacy sampling
         else:raise ValueError('Ambiguous resume: missing recorded field reconstruction loss for this checkpoint version. Use its recorded source/configuration; no new-run default was applied.')
     if 'field_loss' in cp and asdict(settings(cp['field_loss']))!=asdict(settings(raw['field_loss'])):raise ValueError('Conflicting recorded field reconstruction loss in checkpoint and run configuration; resume is ambiguous')
+    if 'observation_time' not in raw:
+        if cp.get('engine_version',0)<=5:raw['observation_time']={'policy':'legacy_mixture_v1'}
+        else:raise ValueError('Missing recorded observation-time policy; resume is ambiguous')
     return CoordinateConfig(**raw).validate()
 
 def normalized_parameter(c,p,families=None):

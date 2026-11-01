@@ -88,3 +88,18 @@ Current new-run field-loss default: Standard MSE. Region-balanced MSE remains an
 explicit experimental choice (alpha.5 starting value). See
 `docs/standard-mse-workflow.md` for UI/CLI/Colab selection and recorded-run
 compatibility. Historical source archives retain their original defaults.
+
+Known-time/A2 update —1 November2026: new runs use observation_time continuous_uniform,
+independent from A2 target times; old runs retain recorded/legacy distributions.
+docs/measurement-times.md and docs/a2-investigation.md describe exact configuration,
+fixed current A2 previews/validation, read-only live-run export and safe transition.
+Never replace source beneath a running trainer. Verify its safe-stop snapshot first;
+resume with that snapshot's original source or create a NEW experiment after restart.
+The source package includes the self-contained diagnostic exporter and refreshed
+8-step notebook, .nvmrc and SOURCE_PACKAGE.md. No checkpoint/data/accepted output
+is included. After extraction verify SOURCE_MANIFEST.json hashes before installation.
+The current delivery archive is outputs/measurement-times-20261101/
+pdeflow-continuous-measurement-times-source.zip on the originating checkout, with
+adjacent .sha256 and notebook. This path is an output, intentionally excluded from
+itself. Follow docs/measurement-times.md → Exact notebook reload for fresh-kernel
+installation and independent A2/B policy review without changing an old run.

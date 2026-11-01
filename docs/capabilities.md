@@ -381,3 +381,21 @@ and evaluation remain independent. Actual CPU notebook and browser executions
 verify both selections in saved checkpoints; existing batched/MPS regressions
 passed. CUDA/real Colab untested. Existing runs retain recorded semantics and
 source checks. Details/evidence: standard-mse-workflow.md.
+
+### Known continuous sensor times / A2 reporting (1 November 2026)
+
+Implemented: NEW B whole-interval stratified continuous sensor times, optional
+recorded early/initial mixture, arbitrary explicit UI times/counts, per-click known
+timestamps, quantity-specific bounded feature-time maps, exact-time values and
+likelihood diagnostics, inspector/timeline/temporal fading, JSON/replay preservation,
+legacy version resolution and incompatible-resume rejection. A2 independently
+retains continuous target/reference evaluation with early/identity coverage and
+separate distribution telemetry. No arbitrary numerical-trajectory interpolation;
+undeclared imports rejected. Timestamp-capable historical models retain historical
+training distributions. No multi-time accuracy guarantee.
+
+Verified: bounded CPU shared three-stage execution, actual heat/wave-v browser
+inference and MPS endpoint/A2 gradients. A2 preview/validation/reporting fixes have
+old/new-source controls and tiny fixed-trajectory learning evidence. CUDA/actual
+Colab and the live run20261101T122421-57f94d11b0a remain unverified. Representation
+gate is unchanged. Details: measurement-times.md and a2-investigation.md.

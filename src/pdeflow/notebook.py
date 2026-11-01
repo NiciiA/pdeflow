@@ -4,6 +4,36 @@ import threading,time
 import numpy as np
 from pdeflow.runtime import read_json
 
+
+def full_history(root,active):
+    """Merge committed history, append-only local journal and live tail by attempt."""
+    root=Path(root);rows=[]
+    if (root/'history.json').exists():rows.extend(read_json(root/'history.json'))
+    if (root/'history-live.jsonl').exists():
+        import json
+        for line in (root/'history-live.jsonl').read_text().splitlines():
+            try:rows.append(json.loads(line))
+            except ValueError:continue  # interrupted trailing line is not a measurement
+    rows.extend(active.get('history',[]));latest={}
+    for row in rows:
+        index=row.get('attempted_update',row['step'])
+        if index<=active.get('attempted_updates',active.get('progress',index)):latest[index]=row
+    return [latest[k] for k in sorted(latest)]
+
+
+def history_figure(history):
+    import matplotlib.pyplot as plt
+    fig,ax=plt.subplots(figsize=(8,3));x=[r['step'] for r in history];y=[r['training_loss'] for r in history]
+    ax.plot(x,y,alpha=.35,label='training objective (full history)')
+    window=min(25,len(y))
+    if window:ax.plot(x[window-1:],np.convolve(y,np.ones(window)/window,mode='valid'),label=f'training moving average ({window} attempts)')
+    val=[r for r in history if 'validation_loss' in r]
+    for fixed,label in ((True,'fixed validation objective'),(False,'legacy resampled validation')):
+        selected=[r for r in val if ('validation_policy' in r)==fixed]
+        if selected:ax.plot([r['step'] for r in selected],[r['validation_loss'] for r in selected],marker='o',markersize=5,label=label)
+    ax.legend();ax.set_xlabel('Successful optimizer updates');return fig
+
+
 def status(session):
     root=session.root;record=read_json(root/'session.json') if (root/'session.json').exists() else {'state':'not started'}
     stages=[]
@@ -12,7 +42,7 @@ def status(session):
         if p.exists():stages.append(read_json(p))
     active=next((s for s in stages if s['state'] in ('preparing','running')),stages[-1] if stages else None)
     if active:
-        rows=active.get('history',[]);timed=[r['step_seconds'] for r in rows[-20:] if 'step_seconds' in r]
+        rows=full_history(root/active['stage'],active);timed=[r['step_seconds'] for r in rows[-20:] if 'step_seconds' in r]
         mean=float(np.median(timed)) if len(timed)>=5 else None
         recent=rows[-20:];wall=sum(v['step_seconds'] for v in recent if 'step_seconds' in v);successful=sum(not v.get('optimizer_update_skipped',False) for v in recent);rate=successful/wall if len(timed)>=5 and wall>0 else None
         record={**record,'stage':active['stage'],'stage_state':active['state'],'attempted_updates':active.get('attempted_updates',active['progress']),'successful_updates':active['progress'],'skipped_updates':active.get('skipped_updates',0),'batch_settings':active.get('batch_settings'),'update':active['progress'],'planned':active['budget'],'elapsed_seconds':active.get('elapsed_seconds',active.get('training_seconds')),
@@ -42,10 +72,24 @@ def display_status(session,plots=True):
     print('Local / persistent bytes:',r['local_bytes'],r['persistent_bytes'])
     h=r.get('history',[])
     if h and plots:
-        fig,ax=plt.subplots(figsize=(7,2));ax.plot([v['step'] for v in h],[v['training_loss'] for v in h],label='training objective')
-        val=[v for v in h if 'validation_loss' in v]
-        if val:ax.plot([v['step'] for v in val],[v['validation_loss'] for v in val],label='fixed validation objective')
-        ax.legend();ax.set_xlabel('Optimizer updates');display(fig);plt.close(fig)
+        fig=history_figure(h);display(fig);plt.close(fig)
+    if r.get('stage')=='evolution':
+        from pdeflow.coordinate.evolution_monitor import read_preview
+        preview=read_preview(session.root/'evolution') if plots else None
+        if preview:
+            meta,frames=preview
+            fig,axes=plt.subplots(len(frames),3,figsize=(10,3*len(frames)),squeeze=False)
+            for row,(caption,values) in enumerate(zip(meta['rows'],frames)):
+                lo,hi=float(values[:2].min()),float(values[:2].max())
+                title=(f"A2 {caption['family']} {caption['quantity']} · physical t={caption['physical_time']:.4g} · {caption['id']}\n"
+                       f"weights/checkpoint update {meta['checkpoint_update']}; preview generation update {meta['preview_generation_update']} · RMSE={caption['rmse']:.5g}")
+                axes[row,0].text(0,1.25,title,transform=axes[row,0].transAxes,fontsize=8)
+                for col,name in enumerate(('Reference','Current evolved prediction','Absolute error')):
+                    axes[row,col].imshow(values[col].T,origin='lower',vmin=0 if col==2 else lo,vmax=max(float(values[2].max()),1e-12) if col==2 else hi)
+                    axes[row,col].set_title(name);axes[row,col].axis('off')
+            fig.tight_layout();display(fig);plt.close(fig)
+        elif plots:print('No verified live A2 preview yet. A1/t=0 images are deliberately not used as A2 evidence.')
+        return {k:v for k,v in r.items() if k not in ('history','config','validation')}
     candidates=[session.root/'flow-validation.npz',session.root/'flow/validation-preview.npz',session.root/'representation-validation.npz',session.root/'autoencoder/validation-preview.npz']
     p=next((p for p in candidates if p.exists()),None)
     if p and plots:

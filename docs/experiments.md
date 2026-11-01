@@ -554,3 +554,23 @@ Existing RB source configurations in accepted output runs/checkpoints remain
 unchanged. Query measures/normalization/reductions and B objectives are preserved;
 standard mode omits regional work instead of reallocating its budget. No evidence
 that this default repairs poor reconstruction. See standard-mse-workflow.md.
+
+### 1 November: A2 debugging and known sensor times
+
+A2 before/after unchanged-weight control confirms stochastic validation/reporting
+bugs, with identical training losses and weights. Fixed two-trajectory learning
+experiments (120/200 and explicitly fixed-A1 200/200 updates) demonstrate nonzero
+operator updates and train learned/held-initial normalized MSE ratios .98849 and
+.82271. Independent validation ratios .98788/.97717 are weak and some late wave-v
+errors worsen. Poor A1 and smoke quality remain; no current-Colab-run diagnosis or
+accuracy claim. No model-size increase or gate bypass. Details: a2-investigation.md,
+outputs/a2-investigation-20261101. A2 default sampling already has continuous whole
+support plus early and exact identity; optional nonzero-conditioned policy is a
+NEW experiment only.
+
+Known sensor-time implementation adds seeded coverage/value/gradient/resume tests
+and real CPU browser inference for heat random-continuous and wave-v arbitrary
+explicit times. New B default differs from historical15/35/45/5 mixture. Existing
+checkpoints remain unchanged. No substantial new training, CUDA/Colab execution or
+scientific comparison of sensor distributions was launched. The tiny A1/A2/B=2/2/2
+execution is pipeline evidence only. See measurement-times.md and verification.md.

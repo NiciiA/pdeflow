@@ -602,3 +602,16 @@ sampling. Recorded checkpoint resolution is version-aware and separate from new
 configuration defaults; resume uses recorded loss and rejects ambiguity/changes.
 Architecture and B/likelihood/physics/evaluation paths are unchanged. See
 standard-mse-workflow.md for controls and evidence.
+
+### Known measurement-time policy (engine6)
+
+observation_times.py supplies independently configured B continuous_uniform or
+continuous_mixture sensor times and bounded per-quantity time-group feature
+placement. Training and playground use the same policy code. A2 query mixtures,
+A1 initial-state encoding and flow s are independent. Every packed observation
+contains its own physical time, scalar quantity, normalized value and sigma;
+endpoint likelihood/inference decode each sensor at that exact coordinate/time.
+Engine≤5 absence resolves to explicit legacy_mixture_v1; engine6 ambiguity and
+changed resume distributions fail. See measurement-times.md. A2 reporting and
+read-only diagnostics are in evolution_monitor/evolution_audit; evaluation restores
+RNG and modes, and preview publication is hash-verified.

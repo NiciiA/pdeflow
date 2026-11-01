@@ -5,7 +5,7 @@ from collections import OrderedDict
 from .profiling import Timings,host_peak_bytes
 from .frozen import FrozenTargets
 from . import batching
-import os,time,signal,threading,math
+import os,time,signal,threading,math,json
 import numpy as np
 import torch
 from pdeflow.runtime import RuntimeSpec,write_json,read_json,atomic_write,digest,file_digest,code_identity,environment,synchronize
@@ -20,7 +20,7 @@ from .physics import family_index
 from pdeflow.field_losses import grouped_queries,AnalysisCache,differentiable_loss,settings as loss_settings
 
 
-def observation_batch(c,items,g,norms,device):
+def observation_batch(c,items,g,norms,device,components=None):
     from .contracts import padded_observations
     rows=[];ids=[]
     for item in items:
@@ -28,12 +28,31 @@ def observation_batch(c,items,g,norms,device):
         if float(torch.rand((),generator=g))<c.unconditional_probability:n=0
         q=torch.rand(n,3,generator=g);q[:,:2]=q[:,:2]*torch.tensor(c.lengths)+torch.tensor(c.origins);q[:,-1]*=c.interval[1]
         from .temporal import sample_times
-        q[:,-1]=sample_times(c,n,g,'observation').float()
+        legacy=c.observation_time.get('policy')=='legacy_mixture_v1'
+        if legacy:q[:,-1]=sample_times(c,n,g,'observation').float()
+        else:
+            from pdeflow.observation_times import continuous
+            time_seed=int(torch.randint(2**31,(),generator=g));q[:,-1]=torch.tensor(continuous(n,c.interval,np.random.default_rng(time_seed),c.observation_time),dtype=torch.float32)
+        if not legacy:quantities=torch.randint(2,(n,),generator=g) if item['family']=='wave' else torch.zeros(n,dtype=torch.long)
+        if components is not None and n:
+            from .evolution_telemetry import record
+            fractions=(q[:,-1]-c.interval[0])/(c.interval[1]-c.interval[0])
+            record(components,'b_observation_time_mean',q[:,-1]);record(components,'b_observation_exact_initial_fraction',fractions.eq(0).float())
+            for k in range(8):record(components,f'b_observation_time_bin_{k}_fraction',((fractions>=k/8)&(fractions<(k+1)/8) if k<7 else fractions>=k/8).float())
         if n:
             from pdeflow.heat_placement import place
-            placement=c.observation_placement or {'random':.5,'even':.25,'heat':.25};policies=list(placement);choice=int(torch.multinomial(torch.tensor(list(placement.values())),1,generator=g));policy=policies[choice];seed=int(torch.randint(2**31,(),generator=g));field=item['solver'].frame(.237,item['parameter'],c.interval,(32,32)) if policy=='heat' else None
-            xy,_=place(n,policy,seed,c.lengths,c.origins,field=field);q[:,:2]=torch.tensor(xy,dtype=torch.float32)
-        quantities=torch.randint(2,(n,),generator=g) if item['family']=='wave' else torch.zeros(n,dtype=torch.long)
+            placement=c.observation_placement or {'random':.5,'even':.25,'heat':.25};policies=list(placement);choice=int(torch.multinomial(torch.tensor(list(placement.values())),1,generator=g));policy=policies[choice];seed=int(torch.randint(2**31,(),generator=g));field=item['solver'].frame(.237,item['parameter'],c.interval,(32,32)) if policy=='heat' and legacy else None
+            if policy=='heat' and not legacy:
+                from pdeflow.observation_times import focused_positions
+                xy=np.empty((n,2))
+                for j,name in enumerate(('u','v')):
+                    ix=quantities.eq(j).numpy()
+                    if not ix.any():continue
+                    def at(count,t,k):return place(count,policy,seed+17*j+k,c.lengths,c.origins,field=item['solver'].frame(t,item['parameter'],c.interval,(32,32),name))
+                    xy[ix],_=focused_positions(q[ix,-1].numpy(),c.interval,c.observation_time['placement_groups'],at)
+            else:xy,_=place(n,policy,seed,c.lengths,c.origins,field=field)
+            q[:,:2]=torch.tensor(xy,dtype=torch.float32)
+        if legacy:quantities=torch.randint(2,(n,),generator=g) if item['family']=='wave' else torch.zeros(n,dtype=torch.long)
         sigma=float(torch.empty(()).uniform_(*c.noise_range,generator=g))
         # Inverse CDF of p0*delta_0 + (1-p0)*Uniform[0,max_sigma].
         # Reuse the original uniform draw: no RNG-stream shift in comparisons.
@@ -61,10 +80,10 @@ def observation_batch(c,items,g,norms,device):
 
 def train(config,output,stage,dependency=None,resume=False,stop_after=None,should_stop=None,event=None,extend=False,checkpoint_policy=None):
     setup_started=time.perf_counter()
-    if resume and 'field_loss' not in config:
+    if resume and ('field_loss' not in config or 'observation_time' not in config):
         # Version-aware recorded semantics, never today's NEW-run default.
         previous,recorded=read_checkpoint(Path(output)/'resume.pt',stage)
-        config={**config,'field_loss':recorded.field_loss}
+        config={'field_loss':recorded.field_loss,'observation_time':recorded.observation_time,**config}
     c=CoordinateConfig(**config).validate();o=options(c,stage);jo=joint_options(c)
     if stage not in ('autoencoder','evolution','flow'):raise ValueError('Stages: autoencoder(A1), evolution(A2), flow(B)')
     from .physics import training_spec
@@ -107,6 +126,9 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             restore_ambient(saved.get('ambient_rng'))
             if device.type=='cuda' and saved.get('cuda_rng'):torch.cuda.set_rng_state_all(saved['cuda_rng'])
         record={'kind':'coordinate_stage_run','id':root.name,'schema_version':2,'architecture':ARCHITECTURE,'stage':stage,'precision':policy,'batch_settings':__import__('pdeflow.training_settings',fromlist=['resolve_batches']).resolve_batches(c)[stage],'training_physics':physics,'specialist':'heat+wave' if len(c.family_weights)>1 else next(iter(c.family_weights)),'config':resolved_config,'resolved_field_loss':field_objective,'source':code_identity(),'scientific_source':source_identity,'config_identity':config_identity,'state':'preparing','progress':step,'budget':total,'pid':os.getpid(),'created_at':now(),'export':str(root/('autoencoder.pt' if stage=='autoencoder' else 'evolution.pt' if stage=='evolution' else 'coordinate.pt')),'dependency':dep}
+        if stage=='evolution':
+            from .evolution_telemetry import ownership
+            record['a2_path_audit']=ownership(ae,optimizer)
         write_json(root/'run.json',record);write_json(root/'config.json',resolved_config);cache=AnalysisCache() if loss_settings(c.field_loss).type in ('weighted_mse','region_balanced_mse') else None;started=time.perf_counter();stop=[False];previous=None
         if threading.current_thread() is threading.main_thread():previous=signal.signal(signal.SIGINT,lambda *_:stop.__setitem__(0,True))
         components={};timings=Timings(device,o['profile_components']);
@@ -161,7 +183,10 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 with timings.measure('decoder_compute'):
                     pred=ae.decode_state(state,q[:,:2],j,f)
                     losses.append(differentiable_loss(pred,target,weights,loss_settings(c.field_loss).type,validate=False))
-                components[item['family']+'_'+('u','v')[j]]=losses[-1].detach()
+                if stage=='evolution':
+                    from .evolution_telemetry import record as measure
+                    measure(components,item['family']+'_'+('u','v')[j],losses[-1])
+                else:components[item['family']+'_'+('u','v')[j]]=losses[-1].detach()
             return torch.stack(losses).mean()
 
         def one(item,iteration,defer=False):
@@ -170,7 +195,8 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 rows=batching.plans(c,[item],g,iteration,stage,norms,cache,timings,item_quantity,grouped_queries)
                 return batching.forward(c,ae,rows,stage,norms,device,timings,targets,differentiable_loss,item_quantity,components)[0]
             from .temporal import state_time
-            phase=state_time(c,iteration,g,'query')
+            from .temporal import evolution_time
+            phase=evolution_time(c,iteration,g) if stage=='evolution' else state_time(c,iteration,g,'query')
             if stage=='autoencoder':
                 t=state_time(c,iteration,g,'encoder')
                 z,f,p=encode(item,t);field=fields(item,z,f,p,[t]);scalar=(ae.decode_parameter(z,families=f)-p).square().mean();components['scalar']=scalar.detach()
@@ -185,7 +211,12 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 xy=torch.tensor(item['context'][:min(32,c.encoder_points)],device=device)
                 with timings.measure('composition_decode_compute'):physical_composition=torch.stack([(ae.decode_state(via,xy,j,f)-ae.decode_state(direct,xy,j,f)).square().mean() for j in range(2 if family=='wave' else 1)]).mean()
                 components.update(latent_alignment=alignment.detach(),composition=composition.detach(),decoded_composition=physical_composition.detach())
-                return field+c.evolution.get('latent_weight',.1)*alignment+c.evolution.get('composition_weight',.01)*(composition+physical_composition)
+                from .evolution_telemetry import record as measure,time_rows
+                from types import SimpleNamespace
+                time_rows(components,[SimpleNamespace(ta=ta,tb=tb)],c.interval[1])
+                a=c.evolution.get('latent_weight',.1)*alignment;b=c.evolution.get('composition_weight',.01)*(composition+physical_composition)
+                for key,value in {'objective_domain_field':field,'objective_spectral':field*0,'objective_alignment':a,'objective_composition':b,'objective_physics':field*0}.items():measure(components,key,value)
+                return field+a+b
             cached=cache_root/(item['id']+('-amp' if torch.is_autocast_enabled(device.type) else '-fp32')+'.pt')
             with torch.no_grad(),timings.measure('frozen_target',host=True):
                 if item['id'] in prepared_zero:
@@ -203,7 +234,7 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 graph=frozen_graphs[graph_key]
             known=torch.rand(1,generator=g).to(device)<jo['known_probability']
             if step<2 and jo['warmup_disclosure_coverage'] and 0<jo['known_probability']<1:known[:]=(iteration%2==0) if step==0 else (iteration%2!=0)
-            with timings.measure('observation_preparation',host=True):observations=observation_batch(c,[item],g,norms,device)
+            with timings.measure('observation_preparation',host=True):observations=observation_batch(c,[item],g,norms,device,components)
             noise=torch.randn(target.shape,generator=g).to(device);s=torch.rand(1,generator=g).to(device);state,velocity,mask=flow_path(c,target,noise,s,known,f)
             components['noiseless_observation_values']=components.get('noiseless_observation_values',0)+(observations[2]&observations[1][...,1].eq(0)).sum().detach()
             components['noisy_observation_values']=components.get('noisy_observation_values',0)+(observations[2]&observations[1][...,1].gt(0)).sum().detach()
@@ -258,7 +289,8 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
 
         def calibrate():
             values=[];families=[]
-            with torch.no_grad():
+            from .evolution_monitor import evaluation_guard
+            with evaluation_guard(ae),torch.no_grad():
                 count=min(c.train_count,max(12,o['calibration_count']));size=o['microbatch'] if o['performance_mode']=='optimized' else 1
                 for start in range(0,count,size):
                     items=data.items(range(start,min(count,start+size)),workers=o['workers'])
@@ -278,7 +310,7 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             tick=time.perf_counter()
             if stage=='autoencoder' and completed:
                 calibration_started=time.perf_counter();mean,scale=calibrate();record['latent_calibration_seconds']=time.perf_counter()-calibration_started
-            cp={'schema':SCHEMA,'architecture':ARCHITECTURE,'engine_version':5,'joint_schema':joint_schema,'stage':stage,'config':resolved_config,'config_identity':config_identity,'progress':step,'attempted_updates':attempted,'successful_optimizer_updates':step,'skipped_updates':skipped_total,'overflow_streak':overflow_streak,'counter_semantics':'successful_updates_v1','initial_config':saved.get('initial_config',saved['config']) if saved else resolved_config,'continuation_history':(saved.get('continuation_history',[]) if saved else [])+([{'from_config':saved['config'],'to_config':resolved_config,'reason':'explicit batch/budget continuation','timestamp':now()}] if saved and saved['config']!=resolved_config else []),'batch_settings':__import__('pdeflow.training_settings',fromlist=['resolve_batches']).resolve_batches(c)[stage],'completed':completed,'autoencoder':ae.state_dict() if stage!='flow' else None,'velocity':model.state_dict() if stage=='flow' else None,'dependency':dep,'dataset_root':os.path.relpath(data.root,root),'dataset_identity':data.metadata['sha256'],'training_ids':[x for x in data.metadata['ids'] if x.startswith('train:')],'normalization':data.metadata['normalization'],'normalizations':norms,'normalization_fitted_ids':data.metadata['fitted_ids'],'latent_mean':mean,'latent_scale':scale,'optimizer':optimizer.state_dict(),'scheduler':{'settings':settings,'completed_updates':step,'semantics':'successful optimizer updates only'},'scaler':scaler.state_dict(),'rng':g.get_state(),'torch_rng':torch.get_rng_state(),'ambient_rng':__import__('pdeflow.coordinate.random_state',fromlist=['capture']).capture(),'cuda_rng':torch.cuda.get_rng_state_all() if device.type=='cuda' else [],'source':code_identity(),'scientific_source':source_identity,'environment':environment(RuntimeSpec(**c.runtime)),'history':history,'actual_precision':policy,'source_change_override':source_override,'effective_examples_processed':effective_examples,'field_loss':c.field_loss,'resolved_field_loss':field_objective,'conditioning_policy':jo,'target_cache_identity':cache_identity,'training_seconds':time.perf_counter()-started,'training_physics':physics,'capabilities':{'state_schemas':physics['state_schemas'],'families':list(c.family_weights),'family_weights':c.family_weights,'dimension':2,'fields':['u','v (wave only)'],'state':'initial displacement + initial velocity(wave) + typed scalar; no trajectory latent','parameter_ranges':{'diffusivity':c.diffusivity_range,'wave_speed':c.wave_speed_range},'temporal':{'mode':'continuous','interval':list(c.interval)},'unconditional_trained':c.unconditional_probability>0 or c.observation_counts[0]==0,'scientific_accuracy':False}}
+            cp={'schema':SCHEMA,'architecture':ARCHITECTURE,'engine_version':6,'joint_schema':joint_schema,'stage':stage,'config':resolved_config,'config_identity':config_identity,'progress':step,'attempted_updates':attempted,'successful_optimizer_updates':step,'skipped_updates':skipped_total,'overflow_streak':overflow_streak,'counter_semantics':'successful_updates_v1','initial_config':saved.get('initial_config',saved['config']) if saved else resolved_config,'continuation_history':(saved.get('continuation_history',[]) if saved else [])+([{'from_config':saved['config'],'to_config':resolved_config,'reason':'explicit batch/budget continuation','timestamp':now()}] if saved and saved['config']!=resolved_config else []),'batch_settings':__import__('pdeflow.training_settings',fromlist=['resolve_batches']).resolve_batches(c)[stage],'completed':completed,'autoencoder':ae.state_dict() if stage!='flow' else None,'velocity':model.state_dict() if stage=='flow' else None,'dependency':dep,'dataset_root':os.path.relpath(data.root,root),'dataset_identity':data.metadata['sha256'],'training_ids':[x for x in data.metadata['ids'] if x.startswith('train:')],'normalization':data.metadata['normalization'],'normalizations':norms,'normalization_fitted_ids':data.metadata['fitted_ids'],'latent_mean':mean,'latent_scale':scale,'optimizer':optimizer.state_dict(),'scheduler':{'settings':settings,'completed_updates':step,'semantics':'successful optimizer updates only'},'scaler':scaler.state_dict(),'rng':g.get_state(),'torch_rng':torch.get_rng_state(),'ambient_rng':__import__('pdeflow.coordinate.random_state',fromlist=['capture']).capture(),'cuda_rng':torch.cuda.get_rng_state_all() if device.type=='cuda' else [],'source':code_identity(),'scientific_source':source_identity,'environment':environment(RuntimeSpec(**c.runtime)),'history':history,'actual_precision':policy,'source_change_override':source_override,'effective_examples_processed':effective_examples,'field_loss':c.field_loss,'resolved_field_loss':field_objective,'conditioning_policy':jo,'observation_time_policy':c.observation_time,'feature_placement_time_policy':'legacy fixed t=.237 u map' if c.observation_time['policy']=='legacy_mixture_v1' else 'Per quantity, at most placement_groups equal-width temporal bins; reference map at mean actual sensor time, 32x32 analysis; background fraction .25; exact measurement evaluation','a2_target_time_policy':{'policy':c.evolution.get('time_policy','legacy_query_v1'),'mixture':__import__('pdeflow.coordinate.temporal',fromlist=['policies']).policies(c)['query']},'target_cache_identity':cache_identity,'training_seconds':time.perf_counter()-started,'training_physics':physics,'capabilities':{'state_schemas':physics['state_schemas'],'families':list(c.family_weights),'family_weights':c.family_weights,'dimension':2,'fields':['u','v (wave only)'],'state':'initial displacement + initial velocity(wave) + typed scalar; no trajectory latent','parameter_ranges':{'diffusivity':c.diffusivity_range,'wave_speed':c.wave_speed_range},'temporal':{'mode':'continuous','interval':list(c.interval),'observation_time_policy':c.observation_time,'observation_training':'Recorded sampling policy; timestamp-capable encoding does not establish multi-time scientific accuracy'},'unconditional_trained':c.unconditional_probability>0 or c.observation_counts[0]==0,'scientific_accuracy':False}}
             # Portable inference must retain actual stage budgets, not config guesses.
             provenance=dict((dependency_cp or {}).get('training_provenance',{}))
             stage_records=dict(provenance.get('stages',{}))
@@ -291,6 +323,11 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 atomic_write(Path(record['export']),lambda out:torch.save(portable,out))
             record.update(state='completed' if completed else 'interrupted',progress=step,attempted_updates=attempted,successful_optimizer_updates=step,skipped_updates=skipped_total,history=history[-200:],history_total=len(history),normalization=data.metadata['normalization'],normalizations=norms,training_seconds=time.perf_counter()-started,checkpoint_seconds=time.perf_counter()-tick,parameters=sum(p.numel() for p in model.parameters() if p.requires_grad),dataset_identity=data.metadata['sha256'],updated_at=now(),capabilities=cp['capabilities'])
             record['checkpoint_bytes']=sum(f.stat().st_size for f in root.glob('*.pt'));record['memory']={'process_peak_host_rss_bytes':host_peak_bytes(),'host_peak_scope':'Process lifetime RSS high-water mark, not stage-local allocation','cuda_peak_allocated':torch.cuda.max_memory_allocated(device) if device.type=='cuda' else None,'cuda_peak_reserved':torch.cuda.max_memory_reserved(device) if device.type=='cuda' else None,'mps_current_allocated':torch.mps.current_allocated_memory() if device.type=='mps' else None};write_json(root/'history.json',history);write_json(root/'run.json',record)
+            if stage=='evolution' and step>0:
+                from .evolution_monitor import publish_preview,indices
+                preview_path=root/'evolution-preview.json'
+                if not preview_path.exists() or read_json(preview_path)['checkpoint_update']!=step:
+                    mt=time.perf_counter();publish_preview(root,c,ae,norms,[data.get('validation',i) for i in indices(c)],step);record['preview_seconds']=time.perf_counter()-mt;write_json(root/'run.json',record)
             if event:event({'stage':stage,'kind':'checkpoint','path':str(root),'record':record,'continuing':not completed})
 
         record['setup_seconds']=time.perf_counter()-setup_started
@@ -300,6 +337,8 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             return value
         try:
             since=0
+            journal=root/'history-live.jsonl'
+            with journal.open('a') as stream:stream.write('\n')  # separate any incomplete line after interruption
             while step<total:
                 if stop[0] or should_stop and should_stop():break
                 synchronize(device);timings.reset();prior_frozen=(cache_hits,cache_misses);prior_region=(cache.hits,cache.misses) if cache is not None else (0,0);prior_preparation=targets.stats.copy();prior_targets=(targets.stats['memory_hits']+targets.stats['disk_hits']+targets.stats['deduplicated_requests'],targets.stats['misses']);tick=time.perf_counter();optimizer.zero_grad(set_to_none=True);lr=learning_rate(settings,step)
@@ -332,6 +371,8 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                     with timings.measure('backward_compute'):scaler.scale(torch.stack(list(losses)).sum()/c.batch_size).backward()
                 batch_loss=float(batch_loss)
                 if not math.isfinite(batch_loss):raise FloatingPointError('Nonfinite stage loss; optimizer not stepped')
+                from .evolution_telemetry import UpdateProbe,summary as component_summary
+                probe=UpdateProbe(model.named_parameters()) if stage=='evolution' and (step==0 or (step+1)%o['validation_every']==0 or (step+1)%c.checkpoint_every==0) else None
                 scale_before=scaler.get_scale()
                 with timings.measure('optimizer_compute'):
                     from .optimization import optimizer_step
@@ -343,21 +384,24 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 measured=timings.report()
                 frozen_report=targets.report()
                 cache_report=({'hits_cumulative':frozen_report['memory_hits']+frozen_report['disk_hits']+frozen_report['deduplicated_requests'],'misses_cumulative':frozen_report['misses'],'hits_this_step':frozen_report['memory_hits']+frozen_report['disk_hits']+frozen_report['deduplicated_requests']-prior_targets[0],'misses_this_step':frozen_report['misses']-prior_targets[1],'items':frozen_report['items'],'bytes':frozen_report['bytes']} if use_batch else {'hits_cumulative':cache_hits,'misses_cumulative':cache_misses,'hits_this_step':cache_hits-prior_frozen[0],'misses_this_step':cache_misses-prior_frozen[1],'items':len(frozen),'bytes':sum(x.numel()*x.element_size() for values in frozen.values() for x in values)})
-                row={'step':step,'attempted_update':attempted,'successful_optimizer_updates':step,'skipped_updates_total':skipped_total,'consecutive_overflows':overflow_streak,'configured_batch':__import__('pdeflow.training_settings',fromlist=['resolve_batches']).resolve_batches(c)[stage],'training_loss':batch_loss,'family_example_counts':{k:sum(x['family']==k for x in items) for k in names},'per_family_loss':{k:float(torch.stack(v).mean()) for k,v in per_family.items()},'components':scalarize(components),'gradient_norm':float(grad) if finite else None,'gradients_finite':finite,'optimizer_update_skipped':skipped,'scaler_scale':scaler.get_scale(),'learning_rate':lr,'step_seconds':elapsed,'data_seconds':sum((measured or {}).get('host_exclusive_seconds',{}).get(k,0.) for k in ('dataset_initial_reference','reference_evaluation','region_analysis')),'component_timings':measured,'data_seconds_definition':'Sum of exclusive host reference evaluation, region analysis and dataset construction; see nested component scopes for packing/other preprocessing. Prefetched CPU reference work is separately recorded in frozen_preparation_step; it can overlap compute and is not added here.', 'timing_semantics':'Per-update synchronized wall time, excluding validation/persistence. Nested component scopes explicitly labelled. No cumulative counter is a step cost.','elapsed_seconds':time.perf_counter()-started,'effective_examples':effective_examples,'frozen_cache':cache_report,'region_cache':{'hits_cumulative':cache.hits if cache is not None else 0,'misses_cumulative':cache.misses if cache is not None else 0,'hits_this_step':cache.hits-prior_region[0] if cache is not None else 0,'misses_this_step':cache.misses-prior_region[1] if cache is not None else 0},'frozen_preparation':frozen_report,'frozen_preparation_step':{k:v-prior_preparation.get(k,0) for k,v in targets.stats.items() if k!='maximum_encoding_batch'},'microbatch_semantics':'A1/A2/default B use actual mixed-family neural microbatches; losses sum per example / effective batch. Explicit accumulated control and legacy B auxiliaries remain serial; endpoint observation auxiliary is batched.','actual_forward_microbatch':max(forward_sizes),'forward_microbatch_sizes':forward_sizes,'quantity_forward_microbatch_sizes':quantity_sizes}
+                row={'step':step,'attempted_update':attempted,'successful_optimizer_updates':step,'skipped_updates_total':skipped_total,'consecutive_overflows':overflow_streak,'configured_batch':__import__('pdeflow.training_settings',fromlist=['resolve_batches']).resolve_batches(c)[stage],'training_loss':batch_loss,'family_example_counts':{k:sum(x['family']==k for x in items) for k in names},'per_family_loss':{k:float(torch.stack(v).mean()) for k,v in per_family.items()},'components':scalarize(component_summary(components)),'gradient_norm':float(grad) if finite else None,'gradients_finite':finite,'optimizer_update_skipped':skipped,'scaler_scale':scaler.get_scale(),'learning_rate':lr,'step_seconds':elapsed,'data_seconds':sum((measured or {}).get('host_exclusive_seconds',{}).get(k,0.) for k in ('dataset_initial_reference','reference_evaluation','region_analysis')),'component_timings':measured,'data_seconds_definition':'Sum of exclusive host reference evaluation, region analysis and dataset construction; see nested component scopes for packing/other preprocessing. Prefetched CPU reference work is separately recorded in frozen_preparation_step; it can overlap compute and is not added here.', 'timing_semantics':'Per-update synchronized wall time, excluding validation/persistence. Nested component scopes explicitly labelled. No cumulative counter is a step cost.','elapsed_seconds':time.perf_counter()-started,'effective_examples':effective_examples,'frozen_cache':cache_report,'region_cache':{'hits_cumulative':cache.hits if cache is not None else 0,'misses_cumulative':cache.misses if cache is not None else 0,'hits_this_step':cache.hits-prior_region[0] if cache is not None else 0,'misses_this_step':cache.misses-prior_region[1] if cache is not None else 0},'frozen_preparation':frozen_report,'frozen_preparation_step':{k:v-prior_preparation.get(k,0) for k,v in targets.stats.items() if k!='maximum_encoding_batch'},'microbatch_semantics':'A1/A2/default B use actual mixed-family neural microbatches; losses sum per example / effective batch. Explicit accumulated control and legacy B auxiliaries remain serial; endpoint observation auxiliary is batched.','actual_forward_microbatch':max(forward_sizes),'forward_microbatch_sizes':forward_sizes,'quantity_forward_microbatch_sizes':quantity_sizes}
+                if probe is not None:row['a2_update_probe']=probe.result()
                 if skipped:
                     from .optimization import gradient_diagnostics
                     row['overflow_diagnostics']={**gradient_diagnostics(model.named_parameters()),'scale_before':scale_before,'scale_after':scaler.get_scale(),'loss_finite':True}
                 if not skipped and (step%o['validation_every']==0 or step==total):
-                    ae.eval();model.eval();state=g.get_state();val={};vt=time.perf_counter()
-                    with torch.enable_grad() if jo['auxiliary']['pde']>0 or c.evolution.get('physics',{}).get('weight',0)>0 else torch.no_grad():
-                        for i in range(min(c.validation_count,max(len(names),o['validation_subset']))):
-                            item=attach(data.get('validation',i));value=float(one(item,effective_examples+i));val.setdefault(item['family'],[]).append(value)
-                    synchronize(device);g.set_state(state);row.update(validation_loss=float(np.mean([np.mean(v) for v in val.values()])),validation_per_family={k:float(np.mean(v)) for k,v in val.items()},validation_seconds=time.perf_counter()-vt)
+                    from .evolution_monitor import evaluation_guard
+                    val={};vt=time.perf_counter();count=min(c.validation_count,max(len(names),o['validation_subset']))
+                    with evaluation_guard(model,g,c.seed+19037),torch.enable_grad() if jo['auxiliary']['pde']>0 or c.evolution.get('physics',{}).get('weight',0)>0 else torch.no_grad():
+                        for i in range(count):
+                            item=attach(data.get('validation',i));value=float(one(item,i*32//max(count,1)));val.setdefault(item['family'],[]).append(value)
+                    synchronize(device);row.update(validation_loss=float(np.mean([np.mean(v) for v in val.values()])),validation_per_family={k:float(np.mean(v)) for k,v in val.items()},validation_seconds=time.perf_counter()-vt,validation_policy='fixed example IDs, independent reset RNG and fixed phase indices; weighted objective, not uniform physical-time accuracy')
                 persistence_started=time.perf_counter()
                 history.append(row);record.update(state='running',progress=step,attempted_updates=attempted,successful_optimizer_updates=step,skipped_updates=skipped_total,history=history[-200:],history_total=len(history),elapsed_seconds=time.perf_counter()-started);write_json(root/'run.json',record)
                 if not skipped and (step%c.checkpoint_every==0 or checkpoint_policy is not None and checkpoint_policy(stage,step)):save(False)
                 row['persistence_seconds']=time.perf_counter()-persistence_started
                 row['end_to_end_seconds']=time.perf_counter()-tick
+                with journal.open('a') as stream:stream.write(json.dumps(row,allow_nan=False)+'\n')
                 if overflow_streak>=o['max_consecutive_overflows']:
                     save(False);raise FloatingPointError('Repeated FP16 overflow: '+str(overflow_streak)+' consecutive skipped attempts; see overflow_diagnostics in history.json/resume.pt for unscaled invalid parameter names and scale history. Startup recovery was bounded, not established. Scheduler did not advance.')
                 if stop_after and since>=stop_after:break

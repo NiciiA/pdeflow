@@ -203,3 +203,24 @@ display metrics only change evaluation. CLI new-run selection, without launching
 pdeflow training start --plan --device cpu --field-loss mse
 pdeflow training start --plan --device cpu --field-loss region_balanced_mse --field-alpha 0.5
 ```
+
+## Known measurement times and A2 monitoring (November 2026)
+
+New training runs use **continuous, stratified and shuffled whole-interval sensor
+times**. Each sensor's time is known conditioning, independent of reconstruction
+and flow time. In the playground, **Take measurements → Measurement times** offers
+Random across the time interval or arbitrary Choose measurement times. The count
+is TOTAL, with optional explicit counts per entered time. Click points stores its
+visible Active measurement time per click. Display-time changes preserve readings.
+Inspect the timestamp timeline/list and temporal marker tolerance. JSON export/
+import and diagnostic replay preserve timestamps. Imported static/undeclared
+trajectory references cannot silently supply arbitrary-time readings.
+
+[Measurement policies, configuration, compatibility and evidence](docs/measurement-times.md)
+explain the new B default and independently tested continuous A2 target-time policy.
+[A2 investigation](docs/a2-investigation.md) documents corrected current nonzero-time
+previews, full-history validation markers, reproducible validation and bounded
+learning results. The current remote Colab run's actual artifacts remain needed;
+the document includes a read-only export cell and safe Drive-verification procedure.
+Do not reload new scientific source inside an active training process. Preserve its
+verified snapshot/source; use a NEW experiment for the revised observation policy.

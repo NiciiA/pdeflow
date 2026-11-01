@@ -690,6 +690,36 @@ export function TrainModel({
                   ) : (
                     <>
                       <strong>Resolved training equations</strong>
+                      <p>
+                        B measurement times:{" "}
+                        {String(
+                          (
+                            plan.config.observation_time as
+                              { policy?: string } | undefined
+                          )?.policy || "recorded legacy policy",
+                        )}{" "}
+                        · known per sensor, total count shared across times. A2
+                        target times use a separate initial/early/whole-interval
+                        mixture.
+                      </p>
+                      <details>
+                        <summary>
+                          Observation-time training distribution
+                        </summary>
+                        <pre>
+                          {JSON.stringify(
+                            plan.config.observation_time,
+                            null,
+                            2,
+                          )}
+                        </pre>
+                        <small>
+                          New runs use randomized continuous whole-interval
+                          times. Advanced configuration accepts observation_time
+                          for an explicit mixture. Changing a resumed run's
+                          distribution is incompatible; start a new experiment.
+                        </small>
+                      </details>
                       {plan.training_physics ? (
                         <>
                           {Object.entries(plan.training_physics.equations).map(
