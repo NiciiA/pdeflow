@@ -32,7 +32,12 @@ def family_index(family):return ('heat','wave').index(get(family).family)
 def strong_residual(model,z,coords,parameter,known,families,norm):
     """Autograd THROUGH direct-time evolution and spatial decoder in physical units."""
     import torch
-    with torch.enable_grad():
+    from .model import derivative_attention
+    if not families.eq(families[0]).all():raise ValueError('Public residual report requires a single family; batched training uses explicit per-family masks')
+    with torch.enable_grad(),derivative_attention():
+        # Independent coordinates per particle: sharing one differentiable Qx3
+        # tensor sums derivatives across particles and is mathematically wrong.
+        if coords.ndim==2:coords=coords[None].expand(len(z),-1,-1)
         coords=coords.detach().clone().requires_grad_(True)
         u=model.decode(z,coords,parameter,known,'u',families)*norm[0]['scale']+norm[0]['mean']
         grad=torch.autograd.grad(u.sum(),coords,create_graph=True)[0]

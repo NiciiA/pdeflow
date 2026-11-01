@@ -35,10 +35,10 @@ def preset(name='large',device='cuda',precision_policy='auto',overrides=None):
 
 
 def training_preset(name='large',device='cuda',precision_policy='auto',overrides=None):
-    """Updated NEW-run presets. preset() retains historical ordinary MSE semantics."""
-    from pdeflow.field_losses import recommended
+    """Explicit Standard MSE for NEW runs; recorded resume configs are authoritative."""
+    from pdeflow.field_losses import new_run_default
     overrides=overrides or {}
-    return preset(name,device,precision_policy,{**overrides,'field_loss':{**recommended(),**overrides.get('field_loss',{})}})
+    return preset(name,device,precision_policy,{**overrides,'field_loss':{**new_run_default(),**overrides.get('field_loss',{})}})
 
 
 def hardware(device='cuda',disk_root=None):
@@ -137,13 +137,42 @@ def _name(name):
 
 
 class Session:
-    def __init__(self,config,name,local_root,persistent_root,allow_cpu_check=False,sync_seconds=300,keep_snapshots=3):
+    def __init__(self,config,name,local_root,persistent_root,allow_cpu_check=False,sync_seconds=300,keep_snapshots=3,*,persistence_enabled=True,save_updates=100,save_min_seconds=0,save_retries=2,save_failure='stop',display_name=None):
         self.c=config if isinstance(config,CoordinateConfig) else CoordinateConfig(**config).validate();self.name=_name(name)
         self.root=Path(local_root).expanduser().resolve()/self.name;self.persistent=Path(persistent_root).expanduser().resolve()/self.name
         if self.root==self.persistent or self.root.is_relative_to(self.persistent) or self.persistent.is_relative_to(self.root):raise ValueError('Fast local and persistent run roots must be separate')
         self.root.mkdir(parents=True,exist_ok=True);self.allow_cpu_check=allow_cpu_check;self.last_sync=0.;self.snapshot=None
         if not 1<=sync_seconds<=86400 or type(keep_snapshots)!=int or not 1<=keep_snapshots<=20:raise ValueError('Sync seconds must be 1–86400; retain 1–20 persistent snapshots')
         self.sync_seconds=sync_seconds;self.keep_snapshots=keep_snapshots
+        if type(persistence_enabled)!=bool or type(save_updates)!=int or save_updates<1 or not 0<=save_min_seconds<=86400 or type(save_retries)!=int or not 0<=save_retries<=5 or save_failure not in ('stop','continue'):raise ValueError('Invalid persistence update/minimum-time/retry/failure policy')
+        self.persistence_enabled=persistence_enabled;self.save_updates=save_updates;self.save_min_seconds=save_min_seconds;self.save_retries=save_retries;self.save_failure=save_failure;self.display_name=display_name or self.name
+    @classmethod
+    def new(cls,config,display_name,local_root,persistent_root,**kwargs):
+        """Explicit new experiment: display names never identify/overwrite runs."""
+        name=time.strftime('%Y%m%dT%H%M%S',time.gmtime())+'-'+uuid.uuid4().hex[:12]
+        return cls(config,name,local_root,persistent_root,display_name=display_name,**kwargs)
+    @classmethod
+    def from_store(cls,persistent_root,run_id,local_root,snapshot=None,device=None,**kwargs):
+        """Fresh-runtime restore with recorded science; never substitute a preset."""
+        from .persistence import latest,verify,restore
+        store=Path(persistent_root)/_name(run_id);record=verify(store,snapshot) if snapshot else latest(store)
+        if not record or not record.get('progress'):raise ValueError('No complete session snapshot')
+        saved=record['progress'];raw=saved['config']
+        if 'field_loss' not in raw:raise ValueError('Ambiguous session resume: missing recorded field reconstruction loss; use the original source/configuration')
+        if saved['scientific_source']['sha256']!=scientific_source()['sha256']:raise ValueError('Saved scientific source differs. Reload source/source.zip from this snapshot before resuming; no automatic source override.')
+        if device:raw={**raw,'runtime':{**raw['runtime'],'device':device}}
+        policy=saved.get('persistence_policy',{})
+        values={k:policy[k] for k in ('save_updates','save_min_seconds','save_retries','save_failure','keep_snapshots','sync_seconds') if k in policy};values.update(kwargs)
+        session=cls(raw,run_id,local_root,persistent_root,display_name=saved.get('display_name',run_id),**values)
+        restored=restore(store,session.root,record['id']);session.snapshot=restored;session.last_sync=restored['created_unix']
+        from .training_artifacts import verify_view
+        if (session.root/'bundles/resumable.json').exists():verify_view(session.root,'resumable')
+        # read_checkpoint independently enforces every frozen dependency hash.
+        from .coordinate.training import read_checkpoint
+        for stage in ('autoencoder','evolution','flow'):
+            p=session.root/stage/'resume.pt'
+            if p.exists():read_checkpoint(p,stage)
+        return session
     def plan_batch_experiment(self,**kwargs):
         from .batch_experiments import plan
         profile=self.root/'profile.json'
@@ -187,21 +216,35 @@ class Session:
             processed=history[-1].get('effective_examples',0) if history else 0
             row.update(successful_updates_to_date=done,remaining_successful_updates=max(0,row['planned_successful_updates']-done),examples_processed_to_date=processed,approximate_examples=processed+max(0,row['planned_successful_updates']-done)*self.c.batch_size)
         record=read_json(self.root/'session.json') if (self.root/'session.json').exists() else {}
-        return {'run_name':self.name,'configuration_state':'applied' if (self.root/'applied-settings.json').exists() else 'configured','training_state':record.get('state','not started'),'next_action':'Configuration application does not launch training','precision':actual,'stages':result}
+        return {'field_reconstruction_loss':__import__('pdeflow.field_losses',fromlist=['training_summary']).training_summary(self.c),'run_name':self.name,'configuration_state':'applied' if (self.root/'applied-settings.json').exists() else 'configured','training_state':record.get('state','not started'),'next_action':'Configuration application does not launch training','precision':actual,'stages':result}
     def inspect(self):return {'hardware':hardware(self.c.runtime['device'],self.root),'configuration':summary(self.c),'persistent':str(self.persistent)}
     def preflight(self,updates=10,warmup=2):
         from .local import is_locked
         if is_locked(self.root):raise ValueError('Stop the active training worker before resource preflight')
         result=profile(self.c,self.root.parent,self.allow_cpu_check,updates,warmup);write_json(self.root/'profile.json',result);return result
-    def sync(self,force=False):
+    def sync(self,force=False,tag=None):
         from .persistence import publish
+        if not self.persistence_enabled:return None
         if force or time.time()-self.last_sync>=self.sync_seconds:
-            started=time.perf_counter();self.snapshot=publish(self.root,self.persistent,keep=self.keep_snapshots);self.last_sync=time.time()
-            write_json(self.root/'sync-status.json',{'last_success_unix':self.last_sync,'snapshot':self.snapshot['id'],'bytes':self.snapshot['unique_bytes'],'sync_seconds':time.perf_counter()-started})
+            started=time.perf_counter()
+            for attempt in range(self.save_retries+1):
+                status={'state':'saving','attempt':attempt+1,'last_success_unix':self.last_sync or None,'latest_verified_snapshot':self.snapshot['id'] if self.snapshot else None,'persistent_age_seconds':time.time()-self.last_sync if self.last_sync else None,'destination':str(self.persistent)}
+                write_json(self.root/'sync-status.json',status);print('Persistence:',json.dumps(status),flush=True)
+                try:
+                    snapshot=publish(self.root,self.persistent,keep=self.keep_snapshots,tag=tag)
+                    self.snapshot=snapshot;self.last_sync=time.time()
+                    status.update(state='verified',snapshot=snapshot['id'],sequence=snapshot.get('sequence'),last_success_unix=self.last_sync,persistent_age_seconds=0,bytes=snapshot['unique_bytes'],uploaded_bytes=snapshot.get('uploaded_bytes'),sync_seconds=time.perf_counter()-started)
+                    write_json(self.root/'sync-status.json',status);print('Persistence:',json.dumps(status),flush=True);break
+                except Exception as error:
+                    status.update(state='failed',error=str(error),error_type=type(error).__name__,traceback=__import__('traceback').format_exc());write_json(self.root/'sync-status.json',status)
+                    print('PERSISTENT SAVE FAILED:',json.dumps(status),flush=True)
+                    if attempt==self.save_retries:
+                        if self.save_failure=='stop':raise
+                        print('Explicit continue policy: work since the last verified snapshot is at risk.',flush=True)
         return self.snapshot
-    def restore(self):
+    def restore(self,snapshot=None):
         from .persistence import restore
-        return restore(self.persistent,self.root)
+        result=restore(self.persistent,self.root,snapshot);self.snapshot=result;self.last_sync=result['created_unix'];return result
     def stop(self):
         write_json(self.root/'stop-request.json',{'requested_unix':time.time(),'meaning':'Stop at the next complete optimizer boundary and persist'})
     def run(self,*args,**kwargs):
@@ -218,7 +261,9 @@ class Session:
         if mode in ('resume','extend'):
             if not (self.root/'session.json').exists():self.restore()
             previous=read_json(self.root/'session.json')
-            recorded=previous['config'].get('field_loss',{})
+
+            if 'field_loss' not in previous['config']:raise ValueError('Ambiguous session resume: recorded field reconstruction loss is missing. Load its original source/configuration; no new-run default is applied.')
+            recorded=previous['config']['field_loss']
             if self.c.field_loss!=recorded:
                 raise ValueError('Field reconstruction loss/settings differ from the recorded run; use its recorded configuration or start a new run. No automatic objective migration.')
         guard(self.c,self.allow_cpu_check)
@@ -248,20 +293,58 @@ class Session:
         attempts=previous.get('attempts',[])+[{'mode':mode,'stages':stages,'gate_override':override_gate,'gate_ratio':gate_ratio,'config_identity':digest(self.c.to_dict()),'time':time.time()}]
         record={'initial_config':previous.get('initial_config',previous.get('config',self.c.to_dict())),'batch_settings':self.training_summary(),'kind':'pdeflow_colab_session','name':self.name,'config':self.c.to_dict(),'stages':stages,'mode':mode,'state':'starting','gate_ratio':gate_ratio,'gate_override':override_gate,'attempts':attempts,
                 'scientific_source':scientific_source(),'environment':environment(RuntimeSpec(**self.c.runtime)),'started_unix':time.time(),
-                'persistence_policy':{'sync_seconds':self.sync_seconds,'keep_snapshots':self.keep_snapshots,'boundary':'after completed optimizer-step checkpoints; plus final sync'}}
+                'display_name':self.display_name,'persistence_policy':{'enabled':self.persistence_enabled,'sync_seconds':self.sync_seconds,'keep_snapshots':self.keep_snapshots,'save_updates':self.save_updates,'save_min_seconds':self.save_min_seconds,'save_retries':self.save_retries,'save_failure':self.save_failure,'boundary':'first successful checkpoint, successful-update cadence (subject to explicit minimum time), stage transitions and safe stop/final'}}
         write_json(manifest,record)
+        if self.persistence_enabled:
+            from .persistence import probe
+            print('Persistent storage probe:',probe(self.persistent),flush=True)
+        source=self.root/'source/source.zip'
+        if not source.exists():
+            from .source_bundle import package
+            identity=package(source);identity.update(scientific_source=scientific_source(),config_identity=digest(self.c.to_dict()))
+            write_json(source.with_name('identity.json'),identity)
+        else:
+            identity=read_json(source.with_name('identity.json'))
+            if file_digest(source)!=identity['sha256'] or identity['scientific_source']['sha256']!=scientific_source()['sha256']:raise ValueError('Recorded source snapshot differs; never overwriting it during resume')
+        write_json(self.root/'resolved-config.json',self.c.to_dict())
+        self.sync(True)  # source/config survive even before the first checkpoint
         def event(e):
-            record.update(stage=e['stage'],progress=e['record']['progress'],state='saving/syncing');write_json(manifest,record);self.sync()
+            record.update(stage=e['stage'],progress=e['record']['progress'],latest_local_checkpoint=str(Path(e['path'])/'resume.pt'),state='saving/syncing');write_json(manifest,record)
+            first=e['record']['progress']==1;barrier=e['record']['state']=='completed' or not e.get('continuing',False)
+            if first or barrier or time.time()-self.last_sync>=self.save_min_seconds:self.sync(True)
             record['state']='running' if e.get('continuing') else 'evaluating' if e['record']['state']=='completed' else 'interrupted'
             write_json(manifest,record)
         try:
-            result=coordinate_stages(self.c.to_dict(),self.root,stages,mode,dependency,gate_ratio,override_gate,stop_after,event)
+            result=coordinate_stages(self.c.to_dict(),self.root,stages,mode,dependency,gate_ratio,override_gate,stop_after,event,
+                checkpoint_policy=lambda stage,step:step==1 or step%self.save_updates==0,
+                finish_hook=lambda _:self.sync(True))
             record.update(result,state=result['state']);write_json(manifest,record)
             if result['state']=='completed' and stages not in ('representation','evolution'):self.export(persist=False)
             return record
         except BaseException as error:
             record.update(state='interrupted' if isinstance(error,KeyboardInterrupt) else 'failed',error=str(error));write_json(manifest,record);raise
-        finally:self.sync(True)
+        finally:
+            # The periodic first/cadence saves above are the primary protection.
+            # Do not mask the original numerical exception with a sync exception.
+            import sys
+            if sys.exc_info()[0] is not None:
+                try:self.sync(True)
+                except Exception as error:print('Final save also failed:',error,flush=True)
+            else:self.sync(True)
+    def finalize(self,standalone_check=True):
+        """Idempotent save/verify, no training/benchmark/model-weight modification."""
+        if (self.root/'flow/resume.pt').exists():
+            from .coordinate.training import read_checkpoint
+            if read_checkpoint(self.root/'flow/resume.pt','flow')[0]['progress']>0:self.export(persist=False)
+        from .training_artifacts import build
+        views=build(self.root,standalone_check=standalone_check)
+        self.sync(True,tag='final')
+        expected=file_digest(self.root/'bundles/resumable.json')
+        complete=bool(self.snapshot and self.snapshot.get('tag')=='final' and self.snapshot['files'].get('bundles/resumable.json',{}).get('sha256')==expected) if self.persistence_enabled else None
+        if self.persistence_enabled and not complete:print('FINAL BUNDLE IS NOT VERIFIED ON PERSISTENT STORAGE. Local bundles are verified; inspect sync-status.json and retry after fixing storage.',flush=True)
+        return {'run_id':self.name,'local':str(self.root),'persistent':str(self.persistent) if self.persistence_enabled else None,'verified_snapshot':self.snapshot['id'] if self.snapshot else None,
+                'complete_bundle_persisted':complete,'final_bundle_snapshot':self.snapshot['id'] if complete else None,
+                'artifact_views':{k:{'manifest':str(self.root/'bundles'/(k+'.json')),'available':v['available'],'incomplete_stages':v['incomplete_stages'],'files':len(v['files'])} for k,v in views.items()},'warning':'Hard termination can lose work since the last completed verified snapshot; smoke execution does not establish accuracy.'}
     def export(self,persist=True):
         from .coordinate.training import read_checkpoint
         # An interrupted extension may retain an older completed export. The
@@ -271,13 +354,24 @@ class Session:
         if not path.exists():raise ValueError('No valid conditional-flow state to export yet')
         cp,c=read_checkpoint(path,'flow')
         if cp['progress']<1:raise ValueError('At least one completed optimizer update is required')
+        destination=self.root/'export/coordinate.pt';report_path=destination.with_suffix('.json');input_hash=file_digest(path)
+        if destination.exists() and report_path.exists():
+            existing=read_json(report_path)
+            if existing.get('input_checkpoint_sha256')==input_hash and existing.get('sha256')==file_digest(destination):
+                if persist:self.sync(True)
+                return destination
         from .coordinate.training import portable_checkpoint
         exported=portable_checkpoint(cp);exported['inference_ready']=True
+        quality=read_json(self.root/'representation-quality.json') if (self.root/'representation-quality.json').exists() else None
+        session_record=read_json(self.root/'session.json') if (self.root/'session.json').exists() else {}
+        override=session_record.get('gate_override')
+        exported['training_provenance']={**cp.get('training_provenance',{}),'representation_gate':{'result':quality,'override_requested':override,'failed_gate_bypassed':bool(override and quality and not quality.get('passed',False)) if quality is not None and override is not None else None,'meaning':'A missing gate record is unknown, never passed'}}
+        exported['diagnostic_requirements']={'state_encoder_omitted':True,'matching_evolution_checkpoint_sha256':cp.get('dependency',{}).get('sha256'),'instruction':'Keep the matching evolution/evolution.pt (contains frozen A1 encoder) for oracle diagnostics; inference itself needs no dependency'}
         exported['training_status']='completed budget' if cp['completed'] else 'partial training; latest saved optimizer boundary'
-        destination=self.root/'export/coordinate.pt';atomic_write(destination,lambda f:torch.save(exported,f))
-        report={'checkpoint':'coordinate.pt','sha256':file_digest(destination),'config':c.to_dict(),'completed_updates':cp['progress'],'training_status':exported['training_status'],
+        atomic_write(destination,lambda f:torch.save(exported,f))
+        report={'checkpoint':'coordinate.pt','sha256':file_digest(destination),'input_checkpoint_sha256':input_hash,'config':c.to_dict(),'completed_updates':cp['progress'],'training_status':exported['training_status'],
               'capabilities':cp['capabilities'],'normalization':cp['normalization'],'scientific_source':cp['scientific_source'],'environment':cp['environment'],
-              'validation':read_json(self.root/'flow-validation.json') if (self.root/'flow-validation.json').exists() else None,'portable':'Includes decoder, flow, conditioning and latent/physical transforms; no training encoder, optimizer, data or external AE required'}
+              'training_provenance':exported['training_provenance'],'diagnostic_requirements':exported['diagnostic_requirements'],'validation':read_json(self.root/'flow-validation.json') if (self.root/'flow-validation.json').exists() else None,'portable':'Includes decoder, flow, conditioning and latent/physical transforms; no training encoder, optimizer, data or external AE required'}
         write_json(destination.with_suffix('.json'),report)
         if persist:self.sync(True)
         return destination

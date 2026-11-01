@@ -23,14 +23,16 @@ class Group:
 def options(c):
     v=dict(encoder_depth=2,decoder_depth=2,observation_depth=1,observation_tokens=8,
            context_depth=1,local_neighbors=4,latent_regularization=1e-5,
-           known_probability=.5,warmup_disclosure_coverage=True,group_weights={'initial_u':1.,'initial_v':1.,'coefficient':1.},
+           known_probability=.5,noiseless_probability=0.,warmup_disclosure_coverage=True,group_weights={'initial_u':1.,'initial_v':1.,'coefficient':1.},
            target_cache=True,initial_field_loss=None,auxiliary={'field':0.,'observation':0.,'pde':0.,'minimum_s':.5},
-           decoder_chunk=1024)
+           observation_auxiliary={},decoder_chunk=1024)
     if set(c.joint)-v.keys():raise ValueError('Unknown joint settings: '+str(set(c.joint)-v.keys()))
     v.update(c.joint)
     for k in ('encoder_depth','decoder_depth','observation_depth','observation_tokens','context_depth','local_neighbors','decoder_chunk'):
         if type(v[k])!=int or v[k]<1:raise ValueError(k+' must be a positive integer')
     if type(v['warmup_disclosure_coverage'])!=bool or type(v['target_cache'])!=bool:raise ValueError('Disclosure coverage/cache switches must be booleans')
+    if not math.isfinite(v['noiseless_probability']) or not 0<=v['noiseless_probability']<=1:raise ValueError('Noiseless probability must be0..1')
+    if v['noiseless_probability']>0 and c.noise_range[0]!=0:raise ValueError('A noiseless mixture requires a noise range including zero')
     if not 0<=v['known_probability']<=1 or not math.isfinite(v['latent_regularization']) or v['latent_regularization']<0:raise ValueError('Invalid disclosure/regularization policy')
     if set(v['group_weights'])!={'initial_u','initial_v','coefficient'} or any(not math.isfinite(x) or x<=0 for x in v['group_weights'].values()):raise ValueError('Positive explicit weights required for all joint groups')
     if v['initial_field_loss'] is not None:
@@ -38,6 +40,9 @@ def options(c):
         settings(v['initial_field_loss'])
     a=v['auxiliary']
     if set(a)!={'field','observation','pde','minimum_s'} or any(not math.isfinite(x) or x<0 for x in a.values()) or a['minimum_s']>1:raise ValueError('Invalid optional decoded auxiliary settings')
+    from .observation_objective import settings
+    # Preserve absent legacy settings verbatim in old checkpoint identities.
+    settings(v['observation_auxiliary'])
     return v
 
 def layout(c):

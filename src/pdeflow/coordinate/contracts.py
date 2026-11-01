@@ -4,6 +4,7 @@ import math
 import numpy as np
 import torch
 from pdeflow.core import GridSpec, ProblemSpec
+from pdeflow.field_losses import new_run_default
 
 @dataclass(frozen=True)
 class CoordinateConfig:
@@ -41,7 +42,7 @@ class CoordinateConfig:
     data_mode: str = 'procedural'
     distribution: dict = field(default_factory=dict)
     training_options: dict = field(default_factory=dict)
-    field_loss: dict = field(default_factory=dict)
+    field_loss: dict = field(default_factory=new_run_default)
 
     joint: dict = field(default_factory=dict)
     family_weights: dict = field(default_factory=lambda:{'heat':.5,'wave':.5})
@@ -79,7 +80,9 @@ class CoordinateConfig:
         if self.temporal_mode!='continuous' or self.data_mode!='procedural' or self.dimension!=2:raise ValueError('Operator v2 requires continuous procedural periodic2D; old trajectory models are incompatible')
         if not self.family_weights or set(self.family_weights)-{'heat','wave'} or any(not math.isfinite(v) or v<=0 for v in self.family_weights.values()):raise ValueError('Positive family weights over heat/wave required')
         if not all(math.isfinite(v) for v in self.wave_speed_range) or not 0<self.wave_speed_range[0]<self.wave_speed_range[1] or type(self.evolution_steps)!=int or self.evolution_steps<1:raise ValueError('Positive finite bounded wave speed range and evolution budget required')
-        if set(self.evolution)-{'depth','graph_depth','latent_weight','composition_weight'}:raise ValueError('Unknown evolution settings')
+        if set(self.evolution)-{'depth','graph_depth','latent_weight','composition_weight','physics'}:raise ValueError('Unknown evolution settings')
+        from .evolution_objective import physics_settings
+        physics_settings(self.evolution.get('physics'))
         if any(type(self.evolution.get(k,1))!=int or self.evolution.get(k,1)<1 for k in ('depth','graph_depth')) or any(not math.isfinite(self.evolution.get(k,0.)) or self.evolution.get(k,0.)<0 for k in ('latent_weight','composition_weight')):raise ValueError('Invalid evolution depth/loss weights')
         from .joint import options as joint_options,layout
         object.__setattr__(self,'joint',joint_options(self));layout(self)

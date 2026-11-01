@@ -24,9 +24,14 @@ class FieldLoss:
     time_groups: int = 4
     region_queries: int = 256  # additional TOTAL per solution, NOT per region/time
     estimator: str = 'grouped_stratified_v1'
+    spectral_weight: float = 0.
+    spectral_resolution: int = 16
+    spectral_frequency_power: float = 0.
 
     def validate(self):
-        if self.type not in ('mse','weighted_mse','region_balanced_mse','mae'):raise ValueError('Unknown field reconstruction loss')
+        if self.type not in ('mse','weighted_mse','region_balanced_mse','mae','spectral_mse'):raise ValueError('Unknown field reconstruction loss')
+        if not math.isfinite(self.spectral_weight) or self.spectral_weight<0 or not math.isfinite(self.spectral_frequency_power) or not 0<=self.spectral_frequency_power<=4 or type(self.spectral_resolution)!=int or not 8<=self.spectral_resolution<=64:raise ValueError('Invalid bounded structured-grid spectral objective')
+        if (self.type=='spectral_mse')!=(self.spectral_weight>0):raise ValueError('spectral_mse requires an explicit positive spectral_weight; other objectives must leave it zero')
         if self.estimator not in ('legacy_uniform_points','grouped_stratified_v1'):raise ValueError('Unknown field-query estimator')
         if self.estimator=='legacy_uniform_points' and self.type!='mse':raise ValueError('Non-MSE losses require grouped_stratified_v1')
         for key in ('alpha','contrast_strength','relative_threshold','absolute_threshold','numerical_relative_floor','minimum_area_fraction','smoothing_fraction'):
@@ -45,7 +50,27 @@ def settings(raw=None):
     return FieldLoss(**({'estimator':'legacy_uniform_points'} if not raw else raw)).validate()
 
 
-def recommended():return asdict(FieldLoss(type='region_balanced_mse'))
+def recommended():return new_run_default()
+
+
+def new_run_default():
+    """Explicit new-run baseline; absent legacy settings retain settings() semantics."""
+    return {'type':'mse','estimator':'grouped_stratified_v1'}
+
+
+def training_summary(c):
+    cfg=settings(c.field_loss)
+    name={'mse':'Standard MSE','region_balanced_mse':'Region-balanced MSE','weighted_mse':'Weighted MSE','mae':'MAE','spectral_mse':'MSE + phase-sensitive spectral error'}[cfg.type]
+    keys=['type','estimator','time_groups']
+    if cfg.type in ('weighted_mse','region_balanced_mse'):
+        keys+=['analysis_resolution','relative_threshold','absolute_threshold','numerical_relative_floor','minimum_area_fraction','smoothing_fraction']
+    if cfg.type=='region_balanced_mse':keys+=['alpha','region_queries']
+    if cfg.type=='weighted_mse':keys+=['contrast_strength']
+    if cfg.type=='spectral_mse':keys+=['spectral_weight','spectral_resolution','spectral_frequency_power']
+    return {'label':name,'description':'Field reconstruction loss: '+name+(f', alpha={cfg.alpha:g}' if cfg.type=='region_balanced_mse' else ''),
+            'settings':{key:getattr(cfg,key) for key in keys},'stages':['A1 representation','A2 decoded evolution'],
+            'domain_queries_per_quantity':c.query_points,'additional_region_queries_per_quantity':cfg.region_queries if cfg.type=='region_balanced_mse' else 0,
+            'meaning':'Training loss controls learning. Display metrics only change evaluation.'}
 
 
 def periodic_components(mask):
@@ -135,8 +160,10 @@ def metric_record(*args,**kwargs):
 
 def differentiable_loss(prediction,target,weights,kind='mse',validate=True):
     # Cast BEFORE subtraction/reduction: safe under mixed precision, gradients retained.
-    error=prediction.float()-target.detach().float();w=weights.detach().to(error.device,dtype=torch.float32)
-    if error.shape!=w.shape or error.shape!=target.shape or validate and (not torch.isfinite(w).all() or torch.any(w<0)):raise ValueError('Invalid field loss query weights/layout')
+    w=weights.detach().to(prediction.device,dtype=torch.float32)
+    if prediction.shape!=w.shape or prediction.shape!=target.shape or validate and (not torch.isfinite(w).all() or torch.any(w<0)):raise ValueError('Invalid field loss query weights/layout')
+    valid=w>0
+    error=torch.where(valid,prediction.float(),0.)-torch.where(valid,target.detach().float(),0.)
     value=error.abs() if kind=='mae' else error.square()
     result=(value*w).sum(1).mean()
     if validate and not torch.isfinite(result):raise FloatingPointError('Nonfinite field reconstruction loss')
@@ -169,7 +196,7 @@ def grouped_queries(c,items,g,normalization,cache,physical_times=None):
     seed=int(torch.randint(2**31,(),generator=g))
     for b,item in enumerate(items):
         g=torch.Generator().manual_seed(seed+b*100003)
-        region_rng=torch.Generator().manual_seed(seed+b*100003+731)
+        region_rng=torch.Generator().manual_seed(seed+b*100003+731) if extra else None
         solver=item.get('solver') or FourierHeat(np.asarray(item['values']).reshape(len(c.times),*c.reference_shape)[0],c.lengths,c.origins)
         times=np.asarray(physical_times) if physical_times is not None else sample_times(c,groups,g,'query').numpy() if c.temporal_mode=='continuous' else np.asarray(c.times)
         def analysis(t):
@@ -177,8 +204,10 @@ def grouped_queries(c,items,g,normalization,cache,physical_times=None):
             from contextlib import nullcontext
             with cache.profiler.measure('region_analysis',host=True) if cache.profiler else nullcontext():
                 return analyze(field,c.lengths,c.field_loss,normalization['scale'])
-        analyses=[cache.get((item['id'],float(t),float(item['D']),tuple(c.lengths),tuple(c.origins),str(asdict(cfg)),normalization['scale']),lambda t=t:analysis(t)) for t in times]
-        counts=[len(a['regions']) for a in analyses];total=sum(counts)
+        # Preserve time/domain RNG and query budget; skip all region reference
+        # frames, segmentation and caching for uniform domain objectives.
+        analyses=[cache.get((item['id'],float(t),float(item['D']),tuple(c.lengths),tuple(c.origins),str(asdict(cfg)),normalization['scale']),lambda t=t:analysis(t)) for t in times] if cfg.type in ('weighted_mse','region_balanced_mse') else [None]*len(times)
+        counts=[len(a['regions']) if a is not None else 0 for a in analyses];total=sum(counts)
         if extra and total>extra:raise ValueError(f'{total} retained time-regions exceed region_queries={extra}; increase the explicit fixed region query budget or adjust documented detection settings. No region was dropped.')
         region_allocation=[]
         if extra and total:region_allocation=[extra//total+(i<extra%total) for i in range(total)]

@@ -493,3 +493,64 @@ invalidated stale preflight. Browser worker effective4 used A1/B [2,2] and A2
 for effective2 versus4; wall/update budget semantics and mocked OOM/overflow are
 separate tests. No test-based model selection or accuracy improvement is claimed.
 These are pipeline-check models only, no substantial training or CUDA/Colab run.
+
+## Saved Medium reconstruction diagnosis —1 November2026
+
+outputs/reconstruction-diagnosis-20261101/ records actual MPS inference for the
+imported80.23M-inference-parameter Medium model (B2,500 successful updates, no skips),
+three saved UI jobs, three clean-sensor validation-field controls and three exact-training-observation-policy validation cases. No main
+model is retrained. Saved UI predictions replay with max difference0. Matching
+A1/A2 files/gate are missing; configured A1 budget is not counted as executed.
+
+The periodic initial-field RMSE.47558 and exact-sensor RMSE.65328 establish failure
+before physical evolution. Its150 noiseless t=0 measurements have rank81 in the
+81-coefficient training-band Fourier subspace and can recover that initial field;
+D remains unidentifiable at t=0. The hotspot50-row system is underdetermined and
+its unconstrained Fourier interpolant is unstable. More Heun steps do not repair
+the model on the bounded4/8/16 probe; no step budget is selected by truth errors.
+
+A predeclared20-step observation-only active-latent correction with trust penalty
+reduces periodic sensor RMSE.65328→.09236, held-out.29059→.22481, initial-field
+.47558→.17635 and domain/time.29352→.21689. All model tensor hashes and inferred D
+are unchanged; conservation still fails. This is a single-case inference-time
+optimization result, not retrained quality, an exact posterior or calibrated
+uncertainty. No hidden references drive the optimization/stopping.
+
+Actual Medium deterministic-head training is unexecuted without E. Its bounded
+20-update tiny-fixture control lowers latent error but worsens decoded field error;
+it cannot establish real conditioning quality. The noiseless input-column audit
+finds exactly initialized weights, but feature ablation hardly improves error.
+An explicit new-run noiseless mixture is implemented/tested, not scientifically
+selected or retrospectively applied. All substantial/main-model training and new
+CUDA/actual Colab diagnostics remain unexecuted. Historical Fourier-inverse
+superiority and non-monotonic test-budget findings are preserved, not reranked.
+
+### 1 November — new objective/persistence implementation, not a learning study
+
+Retain physical-state v2 capacities and the factorized heat/wave architecture.
+Add separately configurable batched clean-endpoint observation likelihood in B
+(defaultbeta0), optional normalized decoded A2 residuals (defaultweight0), and
+opt-in structured phase-sensitive spectral field supervision. Existing new-run
+RB alpha.5 and ordinary-MSE compatibility remain. No Stage C, decoder/attention
+replacement or substantial training occurred. One-factor future ablations and
+held-out/ensemble criteria are specified in observation-aligned-training.md.
+
+Actual local notebook A1=2 failed its minimum baseline gate (ratio4.0453);
+no override or B progression. Partial complete artifacts restore correctly.
+Separate low-level objective fixtures run A1/A2/B=2/2/2, both families per update,
+with exact frozen dependencies, then fresh-process B extension2→3 for state recovery.
+These are pipeline evidence, not accurate models. CPU/MPS compute-only endpoint
+cost is3.55×/6.01× in tiny always-active fixed fixtures; no T4 extrapolation or
+accuracy claim. Current Medium still has B2500 and missing matching E/A2.
+Historical Fourier-inverse superiority/non-monotonic test budgets remain unchanged.
+Full results/failures/identities: observation-aligned-verification.md.
+
+### Standard-MSE baseline-selection continuation
+
+The latest new-run default is Standard MSE, with explicit experimental RB alpha.5.
+Only tiny CPU notebook A1 and browser A1/A2/B pipeline executions verified that
+both choices reach persisted objectives; no learning comparison was launched.
+Existing RB source configurations in accepted output runs/checkpoints remain
+unchanged. Query measures/normalization/reductions and B objectives are preserved;
+standard mode omits regional work instead of reallocating its budget. No evidence
+that this default repairs poor reconstruction. See standard-mse-workflow.md.

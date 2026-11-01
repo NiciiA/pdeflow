@@ -7,11 +7,15 @@ from pdeflow.runtime import write_json
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('action',choices=['config','counts','demo']);p.add_argument('--preset',default='smoke',choices=['smoke','xsmall','small','medium','large','xlarge','custom']);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda','auto']);p.add_argument('--precision',default='fp32',choices=['fp32','bf16','fp16','auto']);p.add_argument('--output',required=True);p.add_argument('--checkpoint');p.add_argument('--family',default='joint',choices=['heat','wave','joint']);p.add_argument('--steps',type=int,default=2);args=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('action',choices=['config','counts','demo']);p.add_argument('--preset',default='smoke',choices=['smoke','xsmall','small','medium','large','xlarge','custom']);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda','auto']);p.add_argument('--precision',default='fp32',choices=['fp32','bf16','fp16','auto']);p.add_argument('--output',required=True);p.add_argument('--checkpoint');p.add_argument('--family',default='joint',choices=['heat','wave','joint']);p.add_argument('--steps',type=int,default=2)
+    p.add_argument('--field-loss',default='mse',choices=['mse','region_balanced_mse']);p.add_argument('--field-alpha',type=float,default=None)
+    # Parse after all controls have been registered.
+    args=p.parse_args()
+    if args.field_alpha is not None and args.field_loss!='region_balanced_mse':p.error('--field-alpha requires region_balanced_mse')
     from pdeflow.colab import training_preset
     from pdeflow.coordinate.presets import counts,LADDER
     if args.action=='config':
-        c=training_preset(args.preset,args.device,args.precision);c=replace(c,family_weights={'heat':.5,'wave':.5} if args.family=='joint' else {args.family:1.}).validate();write_json(args.output,c.to_dict());return
+        c=training_preset(args.preset,args.device,args.precision,{'field_loss':{'type':args.field_loss,**({'alpha':args.field_alpha} if args.field_alpha is not None else {})}});c=replace(c,family_weights={'heat':.5,'wave':.5} if args.family=='joint' else {args.family:1.}).validate();write_json(args.output,c.to_dict());print(__import__('pdeflow.field_losses',fromlist=['training_summary']).training_summary(c)['description']);return
     if args.action=='counts':
         write_json(args.output,{n:counts(training_preset(n,'cpu','fp32')) for n in LADDER});return
     if not args.checkpoint:p.error('demo requires --checkpoint')

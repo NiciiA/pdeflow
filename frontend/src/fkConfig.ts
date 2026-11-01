@@ -1,0 +1,15 @@
+export const defaultFK = {
+  dynamics: "linear_cfm_score_sde",
+  stepper: "euler_maruyama",
+  noise_schedule: "linear_vanish",
+  potential: "annealed_difference",
+  resampler: "systematic",
+  kappa: 0.2,
+  resample_every: 2,
+  ess_fraction: 0.7,
+  terminal_resample: false,
+  chunk_size: 8,
+  observation_weight: 0.01,
+  physics_weight: 0.0001,
+  observation_convention: "tempered_mean",
+};

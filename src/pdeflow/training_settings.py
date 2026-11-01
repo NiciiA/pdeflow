@@ -37,7 +37,9 @@ def batch_identity(c):return {s:{k:v for k,v in r.items() if k in ('microbatch',
 
 
 def configure(c,settings,budget_policy='keep_updates',progress=None):
-    if not isinstance(settings,dict) or set(settings)-{'effective_batch','microbatch','stages'}:raise ValueError('Batch settings support effective_batch, microbatch and stages')
+    if not isinstance(settings,dict) or set(settings)-{'effective_batch','microbatch','stages','schedule_policy'}:raise ValueError('Batch settings support effective_batch, microbatch, stages and schedule_policy')
+    schedule_policy=settings.get('schedule_policy','reject')
+    if schedule_policy not in ('reject','rescale_warmup'):raise ValueError('Choose reject or explicit rescale_warmup schedule policy')
     if budget_policy not in ('keep_updates','keep_examples'):raise ValueError('Choose keep_updates or keep_examples explicitly')
     before=resolve_batches(c);effective=positive(settings.get('effective_batch',c.batch_size),'Effective batch');base=micro_value(settings.get('microbatch',c.training_options.get('microbatch',c.batch_size)))
     stage_values=settings.get('stages',c.training_options.get('stage_batches',{}));normalized={}
@@ -57,6 +59,13 @@ def configure(c,settings,budget_policy='keep_updates',progress=None):
         total=max(done,math.ceil(max(0,old-done)*c.batch_size/effective)+done) if budget_policy=='keep_examples' else old
         total=max(2 if stage=='flow' else 1,total)
         fields[name]=total;rounding[stage]={'old_remaining_examples':max(0,old-done)*c.batch_size,'new_remaining_examples':max(0,total-done)*effective,'examples_delta':max(0,total-done)*effective-max(0,old-done)*c.batch_size,'rounding_extra_examples':max(0,total-done)*effective-max(0,old-done)*c.batch_size if budget_policy=='keep_examples' else 0,'minimum_stage_updates':2 if stage=='flow' else 1}
+        from pdeflow.coordinate.optimization import options
+        warmup=options(c)[stage]['warmup']
+        if total!=old and warmup>=total:
+            if schedule_policy!='rescale_warmup' or progress:raise ValueError(f'{stage}: warmup={warmup} is incompatible with changed budget={total}. Set a compatible schedule explicitly, or use schedule_policy=rescale_warmup for a NEW run.')
+            revised=min(total-1,max(0,round(warmup*total/old)))
+            training[stage]={**training.get(stage,{}),'warmup':revised}
+            rounding[stage]['warmup_change']={'old':warmup,'new':revised,'policy':schedule_policy}
         # Keep the schedule horizon and LR, including when budget conversion
         # changes update count. No implicit LR or schedule scaling.
         if progress:
@@ -112,4 +121,5 @@ def apply_training_settings(target,settings,budget_policy='keep_updates',continu
         write_json(session.root/'resolved-config.json',new.to_dict())
         replacement=Session(new,session.name,session.root.parent,session.persistent.parent,session.allow_cpu_check,session.sync_seconds,session.keep_snapshots)
         replacement.last_sync=session.last_sync;replacement.snapshot=session.snapshot
+        replacement.persistence_enabled=session.persistence_enabled;replacement.save_updates=session.save_updates;replacement.save_min_seconds=session.save_min_seconds;replacement.save_retries=session.save_retries;replacement.save_failure=session.save_failure;replacement.display_name=session.display_name
         return replacement

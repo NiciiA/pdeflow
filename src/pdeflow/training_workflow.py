@@ -137,7 +137,7 @@ def plan(request):
             'budget': budget, 'budget_meaning': BUDGETS[budget], 'pipeline_check': pipeline,
             'requested_device': request['device'], 'resolved_device': str(dev), 'config': config,
             'distribution': __import__('pdeflow.coordinate.dataset',fromlist=['recipe']).recipe(c) if model=='resolution-flexible' and c.temporal_mode=='continuous' else distribution(physical), 'examples': examples, 'updates': updates,
-            'architecture_parameters':__import__('pdeflow.coordinate.presets',fromlist=['counts']).counts(c),
+            'field_reconstruction_loss':__import__('pdeflow.field_losses',fromlist=['training_summary']).training_summary(c),'architecture_parameters':__import__('pdeflow.coordinate.presets',fromlist=['counts']).counts(c),
             'batch_settings':__import__('pdeflow.training_settings',fromlist=['resolve_batches']).resolve_batches(c),'stages': stages,'training_physics':physics, 'grid': physical.to_dict()['grid'],
             'equation': ' · '.join(physics['equations'].values()),
             'varies': 'Periodic initial-field shape mixtures, continuous physical times and an independent observation-placement mixture. Initial-field mixture types are not PDE families.',
@@ -546,7 +546,7 @@ def preview(selector='latest', workspace=None, case=0, field=0, time_index=0, ax
     return payload
 
 
-def coordinate_stages(config,path,stages='both',mode='new',dependency=None,gate_ratio=1.,override_gate=False,stop_after=None,event=None,names=('autoencoder','flow'),stage_hook=None,finish_hook=None,should_stop=None,local_validation=False):
+def coordinate_stages(config,path,stages='both',mode='new',dependency=None,gate_ratio=1.,override_gate=False,stop_after=None,event=None,names=('autoencoder','flow'),stage_hook=None,finish_hook=None,should_stop=None,local_validation=False,checkpoint_policy=None):
     """One shared A1 → A2 → B local/Colab driver, immutable stage dependencies."""
     from pdeflow.coordinate.contracts import CoordinateConfig
     from pdeflow.coordinate.training import train,read_checkpoint
@@ -568,7 +568,7 @@ def coordinate_stages(config,path,stages='both',mode='new',dependency=None,gate_
             total=getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[kind])
             if cp['completed'] and cp['progress']==total:return read_json(root/'run.json')
             if kind!='flow' and (fl/'resume.pt').exists():raise ValueError('Changing the frozen representation/operator requires a new downstream run')
-        return train(config,root,kind,dep,resume,stop_after,should_stop=should_stop or (lambda:(path/'stop-request.json').exists()),event=event,extend=mode=='extend')
+        return train(config,root,kind,dep,resume,stop_after,should_stop=should_stop or (lambda:(path/'stop-request.json').exists()),event=event,extend=mode=='extend',checkpoint_policy=checkpoint_policy)
     if stages in ('both','representation'):
         r=run('autoencoder',ae)
         if r['state']!='completed':return {'state':'interrupted','stage':'autoencoder','progress':r['progress']}

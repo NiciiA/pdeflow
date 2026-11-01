@@ -51,7 +51,7 @@ def test_resume_same_objective_exact_and_change_rejected(tmp_path):
 
 def test_shared_colab_path_defaults_preserved_legacy_and_frozen_flow(tmp_path):
     assert settings(preset('large').field_loss).type=='mse'
-    assert training_preset('large').field_loss['alpha']==.5
+    assert training_preset('large').field_loss['type']=='mse'
     c=tiny();session=Session(c,'check',tmp_path/'local',tmp_path/'persistent',allow_cpu_check=True)
     result=session.run(override_gate=True);assert result['state']=='completed'
     cp,_=read_checkpoint(session.root/'flow/coordinate.pt')

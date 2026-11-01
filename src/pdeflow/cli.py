@@ -118,6 +118,8 @@ def main():
             p.add_argument('--evolution-updates',type=int)
             p.add_argument('--representation-updates', type=int)
             p.add_argument('--flow-updates', type=int)
+            p.add_argument('--field-loss',choices=['mse','region_balanced_mse'],help='New-run field loss (default Standard MSE); does not change B or display metrics')
+            p.add_argument('--field-alpha',type=float,help='Experimental region-balanced blend, default0.5; only with --field-loss region_balanced_mse')
         if action == 'extend':p.add_argument('--additional-updates', type=int, required=True)
         if action in ('status', 'list'):
             p.add_argument('--json', action='store_true')
@@ -202,6 +204,14 @@ def main():
     p=sub.add_parser('cleanup');p.add_argument('--root');p.add_argument('--register-cache');p.add_argument('--apply');p.add_argument('--confirm');p.add_argument('--preview',action='store_true')
     p=sub.add_parser('pin');p.add_argument('path');p.add_argument('--root');p.add_argument('--unpin',action='store_true')
     p=sub.add_parser('diagnose-learning');p.add_argument('--checkpoint',required=True);p.add_argument('--output',required=True);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda']);p.add_argument('--updates',type=int,default=100);p.add_argument('--cases',type=int,default=2)
+    p=sub.add_parser('coordinate-diagnostic-case',help='Capture immutable observations, reference and explicit noise for staged diagnosis')
+    p.add_argument('--checkpoint',required=True);p.add_argument('--output',required=True);p.add_argument('--job');p.add_argument('--reference');p.add_argument('--observations');p.add_argument('--problem');p.add_argument('--validation-index',type=int);p.add_argument('--training-observations',action='store_true');p.add_argument('--seed',type=int,default=91);p.add_argument('--steps',type=int,default=8);p.add_argument('--particles',type=int,default=4);p.add_argument('--resolution',type=int,default=32)
+    p=sub.add_parser('coordinate-diagnose',help='A1/oracle-A2/B and exact-sensor evaluation, never hidden-reference conditioning')
+    p.add_argument('--checkpoint',required=True);p.add_argument('--case',required=True);p.add_argument('--output',required=True);p.add_argument('--evolution');p.add_argument('--representation');p.add_argument('--stages',default='a1,a2,b');p.add_argument('--ablations',action='store_true');p.add_argument('--integration-steps',default='');p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda','auto'])
+    p=sub.add_parser('coordinate-diagnostic-baseline',help='Bounded deterministic observation-to-initial-latent diagnostic head')
+    p.add_argument('--checkpoint',required=True);p.add_argument('--evolution');p.add_argument('--representation');p.add_argument('--output',required=True);p.add_argument('--steps',type=int,default=20);p.add_argument('--train-cases',type=int,default=4);p.add_argument('--validation-cases',type=int,default=4);p.add_argument('--seed',type=int,default=194);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda','auto'])
+    p=sub.add_parser('coordinate-diagnostic-correct',help='Explicit bounded observation-only initial-latent optimization with prior penalty')
+    p.add_argument('--checkpoint',required=True);p.add_argument('--case',required=True);p.add_argument('--output',required=True);p.add_argument('--steps',type=int,default=20);p.add_argument('--learning-rate',type=float,default=.02);p.add_argument('--prior',type=float,default=.01);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda','auto'])
     p=sub.add_parser('coordinate-train');p.add_argument('--config',required=True);p.add_argument('--stage',choices=['autoencoder','evolution','flow'],required=True);p.add_argument('--output',required=True);p.add_argument('--autoencoder','--dependency',dest='autoencoder');p.add_argument('--resume',action='store_true');p.add_argument('--stop-after',type=int);p.add_argument('--extend',action='store_true')
     p=sub.add_parser('coordinate-evaluate-ae');p.add_argument('--checkpoint',required=True);p.add_argument('--output',required=True);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda','auto']);p.add_argument('--split',default='validation',choices=['validation','test'])
     p=sub.add_parser('coordinate-import');p.add_argument('--checkpoint',required=True);p.add_argument('--workspace')
@@ -215,10 +225,28 @@ def main():
         from pdeflow import local
         if args.command in ('train','reconstruct','smoke','resume','train-all','resume-suite','experiment','compare','preflight','capacity-probe','coordinate-compare'):
             raise ValueError('Legacy generative architecture is retired. Use training start --model resolution-flexible or coordinate-train/reconstruct with a joint checkpoint. Existing artifacts remain untouched.')
+        if args.command=='coordinate-diagnostic-case':
+            from pdeflow.coordinate.diagnostic_cases import capture
+            result=capture(args.checkpoint,args.output,args.job,args.reference,args.validation_index,args.observations,args.problem,args.seed,args.steps,args.particles,args.resolution,args.training_observations)
+            print(json.dumps({'case_identity':result['case_identity'],'output':str(Path(args.output).resolve())},indent=2));return
+        if args.command=='coordinate-diagnose':
+            from pdeflow.coordinate.diagnostics import diagnose
+            result=diagnose(args.checkpoint,args.case,args.output,args.device,tuple(args.stages.split(',')),args.evolution,args.representation,args.ablations,tuple(map(int,args.integration_steps.split(','))) if args.integration_steps else ())
+            print(json.dumps({'output':str(Path(args.output).resolve()),'seconds':result['seconds'],'stages':{k:v.get('status','evaluated') for k,v in result['stages'].items()}},indent=2));return
+        if args.command=='coordinate-diagnostic-correct':
+            from pdeflow.coordinate.diagnostic_correction import correct
+            result=correct(args.checkpoint,args.case,args.output,args.device,args.steps,args.learning_rate,args.prior)
+            print(json.dumps({'output':str(Path(args.output).resolve()),'correction_steps':result['steps'],'seconds':result['seconds']},indent=2));return
+        if args.command=='coordinate-diagnostic-baseline':
+            from pdeflow.coordinate.diagnostic_baseline import train_baseline
+            result=train_baseline(args.checkpoint,args.output,args.evolution,args.representation,args.device,args.steps,args.train_cases,args.validation_cases,args.seed)
+            print(json.dumps({'output':str(Path(args.output).resolve()),'successful_updates':result['successful_updates'],'seconds':result['seconds']},indent=2));return
         if args.command == 'training':
             from pdeflow import training_workflow as workflow
             if args.training_action == 'start':
                 advanced = {}
+                if args.field_alpha is not None and args.field_loss!='region_balanced_mse':raise ValueError('--field-alpha requires --field-loss region_balanced_mse')
+                if args.field_loss is not None:advanced['field_loss']={'type':args.field_loss,**({'alpha':args.field_alpha} if args.field_alpha is not None else {})}
                 if args.model == 'resolution-flexible':
                     if args.updates is not None:raise ValueError('Choose separate --representation-updates and --flow-updates for this model')
                     if args.representation_updates is not None:advanced['ae_steps'] = args.representation_updates

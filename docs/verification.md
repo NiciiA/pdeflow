@@ -963,3 +963,65 @@ Native CUDA FP16 startup/accuracy and actual Colab execution remain unverified.
 Finite T4 losses and sensible normalization do not prove finite backpropagation;
 the two supplied attempts cannot distinguish transient scaler overflow from a
 persistent operation-level issue. No full training or gate bypass occurred.
+
+## Reconstruction diagnosis —1 November2026
+
+See [reconstruction-diagnosis.md](reconstruction-diagnosis.md), with complete raw
+records under outputs/reconstruction-diagnosis-20261101/.
+
+| Check | Actual execution/evidence | Limit |
+|---|---|---|
+| Final diagnostic suite | `diagnostics-final-source-tests.log`:18 passed; `final-output-contracts.log`:4 passed including the later quantity-preserving wave check | Counts overlap; tiny CPU stage fixtures are not Medium accuracy evidence |
+| Region estimator/gradients | `field-estimator-and-gradients.log`:25 passed, including ordinary/RB/WMSE/MAE per-example gradient equivalence and periodic/empty/signed safeguards | No substantial loss-comparison study |
+| Broader affected tests | Earlier affected run57 passed,2 CUDA skips and one incorrect state-encoder test assertion; corrected focused suites passed. Later38 passed,1 CUDA skip and one test-device argument failure, separately corrected | Failed commands/logs retained; no claim these failed invocations were clean passes |
+| Noiseless mixture | `noiseless-quantile-test.log`:1 passed, including unchanged legacy outputs/RNG, paired subsequent RNG streams, real input-column gradients and resume rejection | Explicit opt-in only; no main-model accuracy training |
+| Native MPS final source | `noiseless-mps-final-source/`:2 successful updates each A1/A2/B, finite gradients; B noiseless values7/12 and noisy values18/10 | Pipeline fixtures only; no source/gate override |
+| Actual imported Medium | Three saved jobs replay max difference0 on MPS; three clean-design and three exact-training-policy validation cases, fixed-noise ablations,4/8/16-step probe and20-step latent correction recorded | Missing matching E/A2 and gate; no new CUDA/Colab run |
+| Oracle CLI | `cli-oracle-verification.log`:actual capture→A1/A2/B on saved tiny fixture, all evaluated | Does not replace missing Medium oracle results |
+| Diagnostic direct head | `fixture-direct-baseline/`:20 updates, frozen tensor hashes unchanged; latent error improved but decoded error worsened | Actual Medium head unexecuted without E |
+| Frontend/API |3 frontend tests passed; build/type check passed; lint0 errors,3 existing component-export warnings; real saved-result API test passes | No repeated full browser suite; isolated component render is not numerical integration |
+
+Initial development failures and corrections are retained: diagnostic initial-grid
+reshape/plot bug; wrong CLI module invocation; coefficient.encoder mistaken for
+omitted state encoder in a test; str instead of torch.device in a sampler test;
+t=0 parameter-invariance assertion initially used multiple-time sensors; correction
+caller attempted MPS float64 query validation; strict source check correctly
+rejected an earlier fixture after the sampling code changed. Fresh final-source
+fixtures were used instead of editing hashes/overriding checks. Wave shuffle/count
+ablations were corrected to preserve quantity units/mixture; only those variants
+were rerun. Quantitative conclusions use the corrected records.
+
+Model weights, scientific datasets and existing outputs are preserved by before/
+after hashes. No services were launched beyond in-process API tests, whose worker
+threads closed normally. CPU/MPS checks are separate from checkpoint-recorded
+historical CUDA training; new native CUDA/actual Colab execution remains unverified.
+
+Exact training-observation capture has an additional round-trip test in
+`training-observation-capture-test.log`: no hand-designed clean sensor set is
+silently called distribution-matched. Stored original measurements are immutable;
+`--training-observations` applies only to new validation cases. All three such
+Medium MPS controls completed with51 observations and positive training-range noise.
+
+### 1 November — observation alignment and complete persistence
+
+New bounded evidence:98 affected regressions passed with3 actual-CUDA skips;
+22 final focused objective/persistence tests passed (including actual MPS),
+2 actual eight-cell notebook tests passed,3 frontend control tests passed;
+TypeScript/build passed and lint has0 errors/3 existing warnings. Suites overlap.
+The new notebook's A1 two-update fixture failed quality (MSE ratio4.0453), was NOT
+overridden, and saved/restored partial complete artifacts with no generative export.
+Separate low-level A1/A2/B two-update fixtures check objectives/artifacts only.
+Verified first/cadence/stage snapshots, corruption/stale-pointer/retention handling,
+failed-upload visibility, matching encoder and fresh-process continuation. All
+17,242 previously recorded output files are byte-identical. Full commands,
+failures, costs, source ZIP and evidence: observation-aligned-verification.md.
+Actual Colab/Drive/T4/CUDA and scientific gains remain unverified.
+
+### Standard-MSE default continuation
+
+outputs/standard-mse-20261101/ records focused default/mask/estimator/resume/API/CLI
+checks,37 batched/joint regressions,12 frontend tests,3 actual notebook tests and
+1 real rendered browser test executing both tiny CPU loss choices. TypeScript/
+build passed; lint0 errors/3 existing warnings. Exact counts, corrected test-fixture
+assertion, screenshots, preservation/source package and device limits are recorded
+in standard-mse-workflow.md. No substantial training or accuracy claim.

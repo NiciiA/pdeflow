@@ -27,15 +27,13 @@ class CoordinateBundle:
         c=self.config;c.compatible(problem);q=validate_queries(c,queries);points,values,sigma=validate_rows(c,rows,problem);phys=get(problem.family)
         if not 1<=steps<=512 or not 1<=particles<=16 or solver not in ('heun','euler'):raise ValueError('Bounded Euler/Heun sampling requires1..512 steps and1..16 samples')
         if not rows and not self.cp['capabilities']['unconditional_trained']:raise ValueError('Model requires measurements; its prior was not trained')
-        f=torch.full((particles,),family_index(problem.family),device=self.device,dtype=torch.long);known=torch.full((particles,),phys.parameter in problem.known_parameters,dtype=torch.bool,device=self.device)
-        p=normalized_parameter(c,torch.full((particles,),problem.known_parameters[phys.parameter],device=self.device),f) if known.all() else torch.zeros(particles,device=self.device)
+        from .conditioning import prepare
+        inputs=prepare(c,self.cp['normalizations'],problem,rows,particles,self.device)
+        p,known,f=inputs.parameter,inputs.known,inputs.families
+        points,values,sigma,ids=inputs.points,inputs.values,inputs.sigma,inputs.quantities
+        ns=self.cp['normalizations'][problem.family];observations=inputs.observations
         self.chunk_size=int(chunk_size)
-        ns=self.cp['normalizations'][problem.family];ids=torch.tensor([0 if r['field']=='u' else 1 for r in rows],dtype=torch.long,device=self.device);n=max(1,len(rows));oq=torch.zeros(particles,n,3,device=self.device);features=torch.zeros_like(oq);valid=torch.zeros(particles,n,dtype=torch.bool,device=self.device);quantities=torch.zeros(particles,n,dtype=torch.long,device=self.device)
-        if rows:
-            oq[:,:len(rows)]=points.to(self.device);valid[:,:len(rows)]=True;quantities[:,:len(rows)]=ids
-            for j in range(1+int(f[0])):
-                ix=ids.eq(j);indices=torch.where(ix)[0];features[:,indices,0]=(values.to(self.device)[ix]-ns[j]['mean'])/ns[j]['scale'];features[:,indices,1]=sigma.to(self.device)[ix]/ns[j]['scale'];features[:,indices,2]=1
-        observations=(oq,features,valid,quantities);started=time.perf_counter();rng=torch.Generator().manual_seed(seed);noise=torch.randn(particles,c.tokens,c.width,generator=rng) if initial_noise is None else torch.as_tensor(initial_noise)
+        started=time.perf_counter();rng=torch.Generator().manual_seed(seed);noise=torch.randn(particles,c.tokens,c.width,generator=rng) if initial_noise is None else torch.as_tensor(initial_noise)
         if noise.shape!=(particles,c.tokens,c.width) or not torch.isfinite(noise).all():raise ValueError('Explicit initial flow noise shape/values invalid')
         latent=noise.to(self.device)*active_mask(c,known,f)[...,None]
         with torch.no_grad():

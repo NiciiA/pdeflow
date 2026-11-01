@@ -1,9 +1,20 @@
 """Factorized physical-state flow + graph-conditioned learned dynamics, no trajectory code."""
 import math
+from contextvars import ContextVar
+from contextlib import contextmanager
 import torch
 from torch import nn
 from .joint import layout,options,active_mask
 from .graph import GraphEncoder
+
+_coordinate_derivatives=ContextVar('coordinate_derivatives',default=False)
+
+@contextmanager
+def derivative_attention():
+    """Existing math attention, needed for higher derivatives through T on CUDA."""
+    token=_coordinate_derivatives.set(True)
+    try:yield
+    finally:_coordinate_derivatives.reset(token)
 
 class Coordinates(nn.Module):
     def __init__(self,c):super().__init__();self.c=c;self.size=2*c.dimension*c.frequencies+17
@@ -30,7 +41,7 @@ class Attention(nn.Module):
         additive=Q.new_zeros(b,1,n,m)
         if bias is not None:additive=additive+bias[:,None]
         if valid is not None:additive=additive.masked_fill(~valid[:,None,None,:],-torch.inf)
-        if derivatives or not self.training:
+        if derivatives or _coordinate_derivatives.get() or not self.training:
             a=(Q.float()@K.float().transpose(-1,-2)/math.sqrt(w//h)+additive.float()).softmax(-1);r=(a@V.float()).to(q.dtype)
         else:r=torch.nn.functional.scaled_dot_product_attention(Q,K,V,attn_mask=additive)
         return self.out(r.transpose(1,2).reshape(b,n,w))
@@ -74,7 +85,9 @@ class ObservationEncoder(nn.Module):
         self.aggregate=Attention(w,c.heads);self.layers=nn.ModuleList([Block(w,c.heads) for _ in range(options(c)['observation_depth'])])
     def forward(self,observations,quantity_ids=None,time_present=None):
         q,f,valid=observations[:3]
-        if quantity_ids is None and len(observations)>3:quantity_ids=observations[3];q=torch.where(valid[...,None],q,torch.zeros_like(q));f=torch.where(valid[...,None],f,torch.zeros_like(f))
+        if quantity_ids is None and len(observations)>3:quantity_ids=observations[3]
+        # Masked padding must be inert even with explicit quantity IDs or NaNs.
+        q=torch.where(valid[...,None],q,torch.zeros_like(q));f=torch.where(valid[...,None],f,torch.zeros_like(f))
         sigma=f[...,1:2].clamp_min(0);features=torch.cat([f,torch.log1p(sigma),sigma.eq(0).to(f.dtype)],-1)
         quantity_ids=torch.zeros_like(valid,dtype=torch.long) if quantity_ids is None else quantity_ids
         if time_present is not None:

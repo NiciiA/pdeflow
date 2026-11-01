@@ -329,5 +329,9 @@ def register(app,workspace,data,output):
         with np.load(directory/'result.npz',allow_pickle=False) as f:
             samples=f['samples'].reshape(-1,len(p.grid.times),*p.grid.shape);velocity=f['velocity_samples'].reshape(samples.shape) if 'velocity_samples' in f.files else None
         metrics=read_json(directory/'metrics.json')
+        consistency=metrics.get('observation_consistency')
+        if consistency and 'predictions_per_sample' in consistency:
+            from pdeflow.coordinate.diagnostic_metrics import sensor_metrics
+            metrics['sensor_diagnostics']=sensor_metrics(consistency['predictions_per_sample'],read_json(directory/'observations.json'))
         return {'frames':samples.mean(0).tolist(),'velocity_frames':velocity.mean(0).tolist() if velocity is not None else None,'velocity_spread':velocity.std(0).tolist() if velocity is not None else None,'spread':samples.std(0).tolist(),'problem':p.to_dict(),'metrics':metrics,
                 'comparison':read_json(directory/'comparison.json') if (directory/'comparison.json').exists() else None}

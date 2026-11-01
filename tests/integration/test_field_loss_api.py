@@ -10,7 +10,7 @@ from pdeflow.coordinate.contracts import CoordinateConfig
 
 def test_new_plan_default_and_bounded_training_preview(tmp_path):
     request={'problem':'heat-2d','model':'resolution-flexible','budget':'pipeline-check','device':'cpu'}
-    result=plan(request);assert result['config']['field_loss']['type']=='region_balanced_mse' and result['config']['field_loss']['alpha']==.5
+    result=plan(request);assert result['config']['field_loss']['type']=='mse'
     with TestClient(create_app(workspace=tmp_path)) as client:
         response=client.post('/api/training/loss-preview',json=request);assert response.status_code==200,response.text
         preview=response.json();assert preview['split']=='train' and len(preview['examples'])==12

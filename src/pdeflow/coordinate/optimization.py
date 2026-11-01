@@ -72,7 +72,7 @@ def learning_rate(settings,completed):
 
 def scientific_source():
     base=Path(__file__).parents[1]
-    names=['coordinate/contracts.py','coordinate/graph.py','coordinate/physics.py','numerics/dynamic.py','coordinate/model.py','coordinate/joint.py','coordinate/consistency.py','coordinate/profiling.py','coordinate/training.py','coordinate/engine.py','training_settings.py','coordinate/frozen.py','coordinate/batching.py','coordinate/dataset.py','coordinate/optimization.py','coordinate/temporal.py','heat_continuous.py','heat_placement.py','field_losses.py','numerics/__init__.py','core/__init__.py','equations/__init__.py']
+    names=['coordinate/contracts.py','coordinate/graph.py','coordinate/physics.py','numerics/dynamic.py','coordinate/model.py','coordinate/joint.py','coordinate/consistency.py','coordinate/observation_objective.py','coordinate/evolution_objective.py','coordinate/random_state.py','coordinate/profiling.py','coordinate/training.py','coordinate/engine.py','training_settings.py','coordinate/frozen.py','coordinate/batching.py','coordinate/dataset.py','coordinate/optimization.py','coordinate/temporal.py','heat_continuous.py','heat_placement.py','field_losses.py','numerics/__init__.py','core/__init__.py','equations/__init__.py']
     files={n:hashlib.sha256((base/n).read_bytes()).hexdigest() for n in names}
     return {'files':files,'sha256':digest(files),'policy':'Scientific model/data/loss/numerical source, excluding notebook, docs and unrelated UI'}
 
@@ -85,7 +85,8 @@ def model_contract(c):
 
 def resume_contract(old,c,stage,extend=False):
     from .contracts import CoordinateConfig
-    prior=CoordinateConfig(**old['config']).validate()
+    from .training import checkpoint_config
+    prior=checkpoint_config(old)
     differences=[k for k,v in model_contract(c).items() if digest(v)!=digest(model_contract(prior).get(k))]
     if differences:raise ValueError('Incompatible model/data changes: '+', '.join(differences))
     from pdeflow.training_settings import batch_identity
@@ -109,7 +110,10 @@ def resume_contract(old,c,stage,extend=False):
 
 def representation_contract(c):
     """Flow-only auxiliary/cache switches do not change the frozen representation."""
-    value=model_contract(c);value['joint']={k:v for k,v in value['joint'].items() if k not in ('auxiliary','target_cache')}
+    value=model_contract(c);value['joint']={k:v for k,v in value['joint'].items() if k not in ('auxiliary','observation_auxiliary','target_cache','noiseless_probability')}
+    # A2-only physics changes its optimizer objective, not the frozen A1 state
+    # encoder/decoder schema. Strict same-stage resume still compares it above.
+    value['evolution']={k:v for k,v in value['evolution'].items() if k!='physics'}
     return value
 
 

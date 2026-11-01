@@ -17,6 +17,7 @@ class StatePlan:
     tb:float
     tm:float
     queries:list
+    seed:int = 0
 
 
 def plans(c,items,g,iteration,stage,norms,cache,timings,item_quantity,grouped_queries):
@@ -32,7 +33,7 @@ def plans(c,items,g,iteration,stage,norms,cache,timings,item_quantity,grouped_qu
             with timings.measure('region_supervision',host=True):q,y,w,_=grouped_queries(c,[view],g,normal,cache,[tb])
             if not torch.isfinite(w).all() or (w<0).any():raise ValueError('Invalid reference-derived field weights')
             fields.append((q[0,:,:2],(y[0]-normal['mean'])/normal['scale'],w[0]))
-        rows.append(StatePlan(item,ta,tb,tm,fields))
+        rows.append(StatePlan(item,ta,tb,tm,fields,c.seed+iteration+i))
     return rows
 
 
@@ -83,6 +84,10 @@ def forward(c,ae,rows,stage,norms,device,timings,frozen,differentiable_loss,item
                 loss=differentiable_loss(pred[k:k+1],targets[k:k+1],weights[k:k+1],loss_settings(c.field_loss).type,validate=False)
                 field_losses[i].append(loss);components[rows[i].item['family']+'_'+name]=loss.detach()
     field=torch.stack([torch.stack(x).mean() for x in field_losses])
+    from .evolution_objective import structured_field_loss,physics_loss
+    with timings.measure('spectral_field_compute'):
+        extra,info=structured_field_loss(c,ae,field_state,rows,f,norms,device)
+    field=field+extra;components.update(info)
     if stage=='autoencoder':
         scalar=(ae.decode_parameter(z,families=f)-p).float().square();components['scalar']=scalar[-1].detach()
         return field+.1*scalar+joint_options(c)['latent_regularization']*z.float().square().mean((1,2))
@@ -103,4 +108,11 @@ def forward(c,ae,rows,stage,norms,device,timings,frozen,differentiable_loss,item
             for k,i in enumerate(active):physical[i].append(values[k])
     physical=torch.stack([torch.stack(x).mean() for x in physical])
     components.update(latent_alignment=alignment[-1].detach(),composition=composition[-1].detach(),decoded_composition=physical[-1].detach())
-    return field+c.evolution.get('latent_weight',.1)*alignment+c.evolution.get('composition_weight',.01)*(composition+physical)
+    # Independent seed per realization keeps the base supervision RNG unchanged
+    # and makes this optional term invariant to microbatch partitioning.
+    extras=[]
+    with timings.measure('physics_residual_compute'):
+        for i,r in enumerate(rows):
+            extra,info=physics_loss(c,ae,z0[i:i+1],p[i:i+1],known[i:i+1],f[i:i+1],norms,r.seed)
+            extras.append(extra[0]);components.update(info)
+    return field+c.evolution.get('latent_weight',.1)*alignment+c.evolution.get('composition_weight',.01)*(composition+physical)+torch.stack(extras)

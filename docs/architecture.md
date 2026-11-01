@@ -553,3 +553,52 @@ selected-stage disposable subprocesses and persists identities, results/partial
 progress and stable recommendations; it never advances the actual run. Optimizer
 successful/attempted/skip/example counters are separate. Workbench batch_settings
 is a thin adapter to these shared APIs. No scientific architecture/objective change.
+
+### Reconstruction diagnosis boundaries —1 November2026
+
+coordinate/diagnostic_cases captures immutable initial u/v, physical problem,
+observations/noise, independent held-out sensors and explicit flow noise. These
+reference-bearing artifacts are evaluation-only. conditioning.py is the shared
+production measurement packing path; no reference argument is accepted.
+diagnostics.py compares oracle initial encoding, oracle learned evolution and
+production observation-only generation; missing matching encoders are unavailable,
+not randomly initialized. diagnostic_inventory enforces exact frozen dependencies
+and tensors, while diagnostic_metrics owns physical field/sensor statistics.
+
+A separate diagnostic_baseline freezes existing encoders/physics and trains only
+a small deterministic observation-to-initial-latent head. diagnostic_correction
+instead updates active latents through frozen learned evolution/decoding using
+observations and an explicit quadratic trust penalty. Neither replaces the main
+model, imports hidden full-field truth into production or establishes posterior
+calibration. Existing spatial dimension/PDE module boundaries are unchanged.
+
+### Objective alignment and complete artifacts (1 November)
+
+coordinate/observation_objective.py adds no model parameters: it evaluates a
+straight-path clean-endpoint estimate through frozen T/D at exact sensor x/y/t
+and quantity. Mixed-family B forwards remain batched; bounded sensor chunks and
+per-case reductions preserve accumulation. New likelihood configuration is
+separate from legacy auxiliaries, field losses and optional A2 physics.
+coordinate/evolution_objective.py supplies independent decoded strong residuals
+and opt-in structured phase-sensitive spectral supervision. A scoped existing
+math-attention path supports higher derivatives without architecture changes.
+
+persistence.py owns verified content-addressed snapshots with completion markers,
+sequence/parent metadata, a last-written advisory pointer and scan recovery.
+colab.Session owns first/cadence/barrier saves, unique identities, explicit failure
+policy and source capture. training_artifacts.py defines inference/diagnostic/
+resumable manifest views over canonical files, including the exact E, dependencies,
+all available optimizer/scheduler/scaler/RNG/cursor state and source. Downloads
+are optional hash-keyed archives, excluded from routine snapshots. No background
+queue or per-update Drive dataset access. See observation-aligned-training.md.
+
+### Standard-MSE new-run selection
+
+field_losses.new_run_default owns the explicit Standard MSE baseline, shared by
+CoordinateConfig/presets and UI/CLI/Colab resolution. training_summary records
+applicable settings, A1/A2 scope and actual domain/regional query costs. Uniform
+domain losses bypass regional reference analysis/cache without changing domain
+sampling. Recorded checkpoint resolution is version-aware and separate from new
+configuration defaults; resume uses recorded loss and rejects ambiguity/changes.
+Architecture and B/likelihood/physics/evaluation paths are unchanged. See
+standard-mse-workflow.md for controls and evidence.

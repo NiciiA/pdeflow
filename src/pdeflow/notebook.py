@@ -19,7 +19,10 @@ def status(session):
           'examples_per_second':active['config']['batch_size']/mean if mean else None,'estimated_stage_seconds_remaining':(active['budget']-active['progress'])/rate if rate else None,
           'memory':active.get('memory'),'history':rows,'actual_precision':active.get('precision')}
     sync=root/'sync-status.json'
-    if sync.exists():record['persistent_checkpoint']=read_json(sync)
+    if sync.exists():
+        saved=read_json(sync)
+        if saved.get('last_success_unix'):saved['persistent_age_seconds']=max(0,time.time()-saved['last_success_unix'])
+        record['persistent_checkpoint']=saved
     if (root/'representation-quality.json').exists():record['representation_quality']=read_json(root/'representation-quality.json')
     record['local_bytes']=sum(p.stat().st_size for p in root.rglob('*') if p.is_file())
     record['persistent_bytes']=sum(p.stat().st_size for p in session.persistent.rglob('*') if p.is_file()) if session.persistent.exists() else 0

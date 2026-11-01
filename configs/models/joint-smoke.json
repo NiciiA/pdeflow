@@ -35,7 +35,7 @@
     "relative_threshold": 0.25,
     "smoothing_fraction": 0.0,
     "time_groups": 4,
-    "type": "region_balanced_mse"
+    "type": "mse"
   },
   "flow_steps": 2,
   "frequencies": 3,

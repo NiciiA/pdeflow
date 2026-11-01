@@ -854,3 +854,94 @@ needs at most N*L attempted updates without first hitting that failure limit.
 A finite loss does not imply finite gradients. A finite-element global-norm
 overflow must fail before stepping because element-based scaler detection cannot
 catch it. See docs/anchor-fp16-recovery.md for failure diagnostics and evidence.
+
+## Reconstruction diagnostic conventions —1 November2026
+
+Physical time t, flow time s, wave velocity v=du/dt and latent flow velocity dZ/ds
+are distinct. The production straight path is Z_s=(1-s)Z_noise+sZ_target, target
+velocity Z_target-Z_noise; Z_s+(1-s)v is its clean endpoint estimate. The new
+oracle initial test encodes complete X0=(u0,v0 for wave), not a trajectory. Oracle
+evolution uses true coefficient and E(X0); these are evaluation-only upper-information
+controls, not deployable inference.
+
+All physical field metrics inverse-normalize with recorded training-only quantity
+transforms. Spatial quadrature is the periodic node mean. Time quadrature uses
+normalized trapezoid weights on explicitly saved (possibly nonuniform) times;
+RMSE=sqrt(aggregate MSE), never mean(per-example RMSE). Relative L2 is unavailable
+when physical reference RMS<=1e-10. Complex Fourier coefficients use FFT/N;
+summed squared coefficient error equals node MSE by Parseval, including phase.
+Low/high modes are split at radial integer domain-mode index2. This is not a
+physical frequency cutoff invariant to a changed domain.
+
+Exact sensor metrics query each actual x,y,t,quantity. Positive sigma gives
+standardized residual (prediction-value)/sigma. Sigma0 is reported separately
+using tolerance1e-5+1e-4*abs(value); no arbitrary uncertainty is assigned. Four-sample
+empirical intervals are descriptive, not calibrated posterior intervals.
+
+The optional latent correction minimizes, equally over samples,
+
+`mean_sensors(((decoded_normalized - observed_normalized)/d_j)^2)
+ + beta * mean_active_latent((z_standardized - z_original_standardized)^2)`.
+
+Here d_j=sigma_j/training_quantity_scale for positive sigma; d_j=1 for zero sigma.
+The zero-noise term is a deterministic penalty in training-field units, not a
+Gaussian noise assumption. beta>0 anchors the original generated latent; it is a
+local trust penalty, not evaluation of the learned prior density. Known/absent
+groups remain fixed. Frozen T/D are differentiated to the latent at actual sensor
+times; reference/held-out data never enters optimization. Final predeclared steps
+are evaluated without hidden-reference stopping or sample selection. This changes
+the generated distribution and has no exact-posterior guarantee.
+
+For explicit new-run noiseless coverage, `joint.noiseless_probability=p0` samples
+p0*delta_0+(1-p0)*Uniform[0,S] with a range including0. Reuse the existing uniform
+quantile U: sigma=0 for U<p0, otherwise S*(U-p0)/(1-p0); p0=1 gives0. The event
+probability is p0 and the conditional positive quantile is uniform. No extra RNG
+draw shifts subsequent conditioning data. The absent/default p0=0 executes the
+original sampling code exactly. This option changes B's declared observation-noise
+distribution, not A1/A2 field objectives or latent velocity loss; resume changes
+are incompatible and old checkpoints are not retroactively relabelled.
+
+### Decoded endpoint likelihood and optional physical/spectral training (1 November)
+
+The operator-v2 straight path remains z_s=(1-s)epsilon+s z_target, velocity target
+z_target-epsilon, with the existing active-group-balanced MSE. The new optional B
+term evaluates z_hat=z_s+(1-s)v_theta, inverts latent calibration once, evolves T
+at each exact sensor physical time and decodes its physical quantity. Independent
+positive noise uses .5 r²/(sigma²+delta_model²) plus optional Gaussian constant;
+zero noise uses a separately declared finite tolerance penalty, never a silently
+floored exact likelihood. Uniform bounded sensor sampling estimates per-case
+means (or sums with N/K correction), then averages cases. No observations =>0.
+A beta=0 fast path leaves base sampling/decoding untouched. The estimated endpoint
+is not an integrated posterior draw and a sensor-fit gain is not calibration.
+
+Optional A2 residuals are (u_t-D lap u)/(a_u/T), (u_t-v)/(a_u/T),
+(v_t-c²lap u)/(a_v/T), through actual T/D with FP32 math attention and independent
+uniform space/time collocation. Paired supervised dynamics remains essential.
+Frozen representation parameters remain frozen while derivatives through them
+are retained. Public particle residual coordinates are now independent leaves;
+sharing one coordinate leaf incorrectly sums derivatives across particles.
+
+Optional spectral_mse is domain MSE plus lambda times complex-DFT difference on
+an extra declared structured periodic N² grid, forward normalization1/N², sum of
+all modes with mean-one (1+kx²+ky²)^(p/2) weights. These are dimensionless mode
+indices, not an isotropic physical Sobolev norm on non-square boxes. Real
+separable DFT gives identical mathematics across devices without scattered FFTs.
+p=0 obeys Parseval; phase-shifted equal-magnitude modes retain nonzero error.
+Default lambda=0 unless spectral_mse is explicitly selected. No automatic
+combination with region balancing or latent-token weights occurs.
+
+Full equations, noise/quantity units, reductions, s activation, warmup, query
+costs, defaults and separate ablations: observation-aligned-training.md.
+
+### Standard-MSE baseline default (1 November continuation)
+
+New-run field objectives default to domain MSE: sum of squared normalized errors
+against detached reference values with the original spatial quadrature/sampling
+weights, reduced per physical-time group/active quantity/realization as before.
+Zero-weight invalid points are masked before subtraction, not counted as data.
+RB remains (1-alpha)domain MSE +alpha mean(region MSE), alpha.5 experimental,
+with unchanged signed periodic regions and corrected stratified estimator.
+The standard path removes only regional analysis/query/cache work, not domain
+queries or their distribution. The choice affects A1 and decoded A2 only; B FM,
+likelihood, physics and displayed metrics remain distinct. Detailed compatibility
+and exact selection commands: standard-mse-workflow.md.

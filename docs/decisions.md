@@ -847,3 +847,78 @@ locations before clipping, fail a norm-only overflow before optimizer mutation,
 and retain worker/parent tracebacks in reports and notebook output. The supplied
 T4 logs cannot establish whether the two initial overflows are temporary; native
 CUDA recovery remains unverified locally. See docs/anchor-fp16-recovery.md.
+
+## Diagnose reconstruction before replacing architecture —1 November2026
+
+Use actual imported Medium tensors and saved observation sets; do not attribute
+poor UI images to smoke models, markers, physics ambiguity or a missing encoder
+without checking records. The latest three relevant jobs replay exactly on MPS.
+Their generated initial fields already fail, and the informative periodic sensor
+system can recover its finite-Fourier initial field. Matching E/A2 is absent, so
+A1 versus B cannot yet be causally separated. Do not train a replacement decoder
+or enable a decoded FM auxiliary on that evidence alone.
+
+Keep staged oracles, a bounded deterministic diagnostic head and explicit
+observation-only latent correction outside production training/inference defaults.
+The correction improves the one measured case but remains a changed sample with
+remaining physical errors. Use strict dependency/tensor checks, no source-hash
+edits or strict=False. Preserve old inference artifacts and source snapshot;
+scientific source changes still block ordinary training resume.
+
+Fix inert masked padding, retain actual stage/gate provenance in future exports,
+and provide explicit opt-in atom-at-zero noise sampling. The observed noiseless
+feature column never moved from initialization, but its controlled ablation has
+only a tiny effect on this failure; do not call it the dominant cause. Keep
+noiseless_probability absent/0 exactly backward compatible and reject changed
+resume distributions. Do not silently alter existing presets, field loss,
+region alpha, architecture, point counts, datasets or gate outcomes.
+
+### 1 November: observation-aligned objectives and durable complete runs
+
+The user scope is authoritative; the design PDF offers alternatives, not a demand
+for simultaneous attention/decoder/Stage-C redesign. Keep physical-state v2, all
+capacity presets and the broader1D–3D chemistry purpose. No project/architecture
+scope conflict was found: the periodic2D operator remains a declared slice.
+
+Use a separate beta=0-default decoded clean-endpoint likelihood with exact sensor
+coordinates/quantities/noise and independent selection RNG. Freeze A1/A2 in B,
+retain gradients through them, preserve real microbatches. Explicit Gaussian
+model discrepancy and finite noiseless tolerance avoid disguising sigma flooring
+as likelihood. Region-balanced alpha=.5 remains the new field-preset default,
+separate from FM, observation likelihood and optional A2 residuals. Structured
+complex-DFT supervision is an explicit domain-MSE variant, never an FFT of scattered
+queries. Richer attention, direct sensor decoding, joint Stage C and new physics
+remain deferred until representation/evolution/conditioning errors are separated.
+
+The old portable inference export intentionally omitted E; the missing original
+Medium E/A2 cannot be recreated. New snapshots retain exact source and complete
+canonical stages from the first valid checkpoint. Inference remains portable;
+diagnostic/resumable artifacts are verified manifest views so frozen files dedup
+rather than multiplying multi-GB archives. Drive rename atomicity is not assumed.
+Objects and complete manifests verify before the advisory pointer is updated;
+restore scans if it is stale. Default save-failure policy stops after bounded
+retries. Unique run ID differs from display name; restore reads recorded science.
+Resuming different source/objectives is never silently authorized. Explicit
+new-run warmup rescaling is available for budget conversion; otherwise reject an
+incompatible warmup. Functional resume differs from cross-device exact replay.
+
+An actual MPS check found unique_dim unsupported. Duplicate/selection metadata
+validation now runs explicitly on CPU for all devices, not via concealed model
+fallback. Mathematical loss/reductions and gradient paths remain on-device.
+The CPU checkpoint replay remains exact within the tested compatible environment.
+
+### 1 November — Standard MSE becomes the NEW-run default
+
+The latest user request supersedes the earlier experimental RB-default policy.
+Keep the exact existing RB formulation/alpha/detection/stratified estimator;
+select it explicitly, starting at alpha.5. All new-run entry points now use
+Standard MSE. This resolves the policy disagreement with the previous handoff;
+historical run metadata and scientific outputs remain immutable. No architecture,
+flow/observation/physics/correction or display-metric change is implied.
+
+Uniform domain objectives do not need region analysis. Skip analysis frames,
+segmentation, regional reference queries and cache allocation while preserving
+the original domain/time RNG and count. Mask zero-weight invalid points before
+subtraction. Version-aware checkpoint resolution preserves recorded/legacy loss
+semantics, rejects ambiguous/conflicting new records, and never inherits a new
+preset on resume. Source checks remain strict. See standard-mse-workflow.md.

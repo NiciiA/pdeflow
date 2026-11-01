@@ -1,11 +1,13 @@
-"""Verified content-addressed snapshots for mounted Drive or a local persistent dir.
+"""Verified, content-addressed safe-boundary snapshots on local/mounted storage.
 
-No reliance on Drive rename atomicity: recovery accepts only a complete manifest
-whose body hash, committed marker and EVERY content object verify.
+Drive rename is not assumed atomic. Objects -> manifest -> verified completion
+marker -> latest pointer LAST. Recovery always scans complete manifests, so a
+stale pointer or interrupted upload cannot replace the last verified snapshot.
 """
 from pathlib import Path
-import json,uuid,time,shutil,os
+import json,uuid,time,shutil
 from pdeflow.runtime import read_json,write_json,file_digest,digest
+
 
 def _safe(root,relative):
     p=root/relative
@@ -13,83 +15,122 @@ def _safe(root,relative):
     return p
 
 
-def latest(root):
-    root=Path(root);valid=[]
+def probe(root):
+    """Non-destructive write/read/delete probe before training; no queued success."""
+    parent=Path(root).parent;parent.mkdir(parents=True,exist_ok=True)
+    path=parent/('.pdeflow-probe-'+uuid.uuid4().hex);payload=uuid.uuid4().bytes
     try:
-        if read_json(root/'.pdeflow-store.json').get('kind')!='pdeflow_coordinate_snapshots':return None
-    except (OSError,ValueError):return None
+        path.write_bytes(payload)
+        if path.read_bytes()!=payload:raise OSError('Persistent storage write/read probe mismatch')
+    finally:path.unlink(missing_ok=True)
+    return {'verified':True,'parent':str(parent),'time':time.time()}
+
+
+def verify(root,identifier):
+    root=Path(root)
+    if not isinstance(identifier,str) or len(identifier)!=32 or not identifier.isalnum():raise ValueError('Invalid snapshot ID')
+    path=_safe(root,'snapshots/'+identifier+'.json');record=read_json(path)
+    if record['id']!=identifier or path.with_suffix('.commit').read_text()!=digest(record):raise ValueError('Missing/invalid completion marker')
+    for name,entry in record['files'].items():
+        _safe(root,name)  # validate logical destination independently of objects
+        sha=entry['sha256']
+        if len(sha)!=64 or any(x not in '0123456789abcdef' for x in sha):raise ValueError('Invalid object identity')
+        obj=_safe(root,'objects/'+sha)
+        if obj.stat().st_size!=entry['bytes'] or file_digest(obj)!=sha:raise ValueError('Incomplete/corrupt object: '+name)
+    return record
+
+
+def snapshots(root):
+    root=Path(root)
+    try:
+        if read_json(root/'.pdeflow-store.json').get('kind')!='pdeflow_coordinate_snapshots':return []
+    except (OSError,ValueError):return []
+    valid=[]
     for path in (root/'snapshots').glob('*.json'):
-        try:
-            record=read_json(path)
-            if path.with_suffix('.commit').read_text()!=digest(record):continue
-            for name,entry in record['files'].items():
-                _safe(Path('/'),name) if Path(name).is_absolute() else None
-                obj=_safe(root,'objects/'+entry['sha256'])
-                if len(entry['sha256'])!=64 or obj.stat().st_size!=entry['bytes'] or file_digest(obj)!=entry['sha256']:raise ValueError('Incomplete object')
-                if '..' in Path(name).parts or Path(name).is_absolute():raise ValueError('Unsafe snapshot relative path')
-            valid.append(record)
+        try:valid.append(verify(root,path.stem))
         except (OSError,ValueError,KeyError,TypeError):continue
-    return max(valid,key=lambda r:r['created_unix']) if valid else None
+    return sorted(valid,key=lambda r:(r.get('sequence',0),r['created_unix']),reverse=True)
 
 
-def publish(local,persistent,keep=3):
+def latest(root):
+    records=snapshots(root)
+    return records[0] if records else None
+
+
+def _names(local):
+    for p in local.rglob('*'):
+        rel=p.relative_to(local)
+        if not p.is_file() or p.is_symlink() or any(x in ('checkpoints','profile-cache','latent-targets','__pycache__','downloads') for x in rel.parts):continue
+        if p.name in ('sync-status.json','stop-request.json'):continue
+        if 'batch-experiments' in rel.parts and p.suffix in ('.pt','.npz','.npy','.png'):continue
+        if (p.suffix in ('.pt','.json','.npz','.png') and p.name!='dataset.npz') or rel.as_posix()=='source/source.zip':yield rel.as_posix()
+
+
+def publish(local,persistent,keep=3,tag=None):
+    """Synchronous call only at a safe trainer boundary; no background copy queue."""
     if type(keep)!=int or not 1<=keep<=20:raise ValueError('Keep 1–20 complete persistent snapshots')
     local=Path(local);root=Path(persistent);_safe(root,'.pdeflow-store.json');root.mkdir(parents=True,exist_ok=True)
     marker=root/'.pdeflow-store.json'
     if not marker.exists():
-        if any(root.iterdir()):raise ValueError('Persistent run directory is not an owned PDEFlow snapshot store; choose a new run name')
-        write_json(marker,{'kind':'pdeflow_coordinate_snapshots','schema':1,'id':uuid.uuid4().hex})
+        if any(root.iterdir()):raise ValueError('Persistent run directory is not an owned PDEFlow snapshot store; choose a new run ID')
+        write_json(marker,{'kind':'pdeflow_coordinate_snapshots','schema':2,'id':uuid.uuid4().hex})
     elif read_json(marker).get('kind')!='pdeflow_coordinate_snapshots':raise ValueError('Unrecognized persistent store; no files changed')
     _safe(root,'objects').mkdir(parents=True,exist_ok=True);_safe(root,'snapshots').mkdir(exist_ok=True)
-    names=[]
-    for p in local.rglob('*'):
-        if not p.is_file() or p.is_symlink() or any(x in ('checkpoints','profile-cache','latent-targets','__pycache__') for x in p.relative_to(local).parts):continue
-        if 'batch-experiments' in p.relative_to(local).parts and p.suffix in ('.pt','.npz','.npy','.png'):continue
-        # Only this workflow's artifacts, not arbitrary data or notebook files.
-        if p.suffix in ('.pt','.json','.npz','.png') and p.name!='dataset.npz':names.append(p.relative_to(local).as_posix())
-    files={}
-    for name in names:
-        p=_safe(local,name);sha=file_digest(p);obj=_safe(root,'objects/'+sha)
-        if not obj.exists() or obj.stat().st_size!=p.stat().st_size or file_digest(obj)!=sha:
+    files={};uploaded=0
+    for name in sorted(_names(local)):
+        p=_safe(local,name);size=p.stat().st_size;sha=file_digest(p);obj=_safe(root,'objects/'+sha)
+        if not obj.exists() or obj.stat().st_size!=size or file_digest(obj)!=sha:
             temporary=_safe(root,'objects/.upload-'+uuid.uuid4().hex)
-            shutil.copyfile(p,temporary)
-            if file_digest(temporary)!=sha:raise ValueError('Persistent upload integrity failed; previous committed snapshot retained')
-            # Object publication may be non-atomic on Drive. The commit is last.
-            shutil.copyfile(temporary,obj)
-            if file_digest(obj)!=sha:raise ValueError('Persistent object incomplete; previous snapshot retained')
-            temporary.unlink()
-        files[name]={'sha256':sha,'bytes':p.stat().st_size}
-    record={'id':uuid.uuid4().hex,'created_unix':time.time(),'files':files,'unique_bytes':sum(e['bytes'] for e in {v['sha256']:v for v in files.values()}.values()),'progress':read_json(local/'session.json') if (local/'session.json').exists() else None}
+            try:
+                shutil.copyfile(p,temporary)
+                if temporary.stat().st_size!=size or file_digest(temporary)!=sha or file_digest(p)!=sha:raise ValueError('Source changed/upload integrity failed; previous committed snapshot retained')
+                shutil.copyfile(temporary,obj)
+                if obj.stat().st_size!=size or file_digest(obj)!=sha:raise ValueError('Persistent object incomplete; previous snapshot retained')
+                uploaded+=size
+            finally:temporary.unlink(missing_ok=True)
+        files[name]={'sha256':sha,'bytes':size}
+    prior=latest(root)
+    if prior and prior['files']==files and (tag is None or prior.get('tag')==tag):return prior
+    progress=read_json(local/'session.json') if (local/'session.json').exists() else None
+    record={'id':uuid.uuid4().hex,'sequence':prior.get('sequence',0)+1 if prior else 1,'parent':prior['id'] if prior else None,'created_unix':time.time(),'files':files,'tag':tag,
+            'unique_bytes':sum(e['bytes'] for e in {v['sha256']:v for v in files.values()}.values()),'uploaded_bytes':uploaded,'progress':progress,
+            'stage':(progress or {}).get('stage'),'successful_update':(progress or {}).get('progress',0),'source_identity':(progress or {}).get('scientific_source',{}).get('sha256'),'config_identity':digest((progress or {}).get('config'))}
     manifest=_safe(root,'snapshots/'+record['id']+'.json');write_json(manifest,record)
     if read_json(manifest)!=record:raise ValueError('Persistent manifest integrity failed')
     manifest.with_suffix('.commit').write_text(digest(record))
-    if latest(root) is None:raise ValueError('No complete persistent checkpoint; last good snapshot not replaced')
-    # Retention is scoped ONLY to this run's content-addressed snapshot store.
-    committed=[]
-    for p in (root/'snapshots').glob('*.json'):
-        try:
-            r=read_json(p)
-            if p.with_suffix('.commit').read_text()==digest(r):committed.append((p,r['created_unix']))
-        except (OSError,ValueError,KeyError):continue
-    committed=[p for p,_ in sorted(committed,key=lambda v:v[1],reverse=True)]
-    for p in committed[keep:]:p.with_suffix('.commit').unlink(missing_ok=True);p.unlink()
+    verify(root,record['id'])  # verify THIS snapshot, never merely any older one
+    write_json(root/'latest.json',{'id':record['id'],'manifest_sha256':digest(record)})
+    if read_json(root/'latest.json')['id']!=record['id']:raise ValueError('Latest pointer readback failed; complete snapshot remains discoverable by scanning')
+    # Owned run only. Final/best snapshots are pinned; all their dependencies
+    # remain referenced objects. No other user run is inspected or cleaned.
+    committed=snapshots(root);retained={r['id'] for r in committed[:keep]}|{r['id'] for r in committed if r.get('tag') in ('best','final')}
+    for r in committed:
+        if r['id'] not in retained:
+            p=root/'snapshots'/r['id'];p.with_suffix('.commit').unlink(missing_ok=True);p.with_suffix('.json').unlink()
     referenced=set()
     for p in (root/'snapshots').glob('*.json'):
         try:referenced.update(e['sha256'] for e in read_json(p)['files'].values())
-        except (ValueError,KeyError):pass
+        except (OSError,ValueError,KeyError):continue
     for p in (root/'objects').iterdir():
         if p.name not in referenced and len(p.name)==64 and all(x in 'abcdef0123456789' for x in p.name):p.unlink()
     return record
 
 
-def restore(persistent,local):
-    persistent=Path(persistent);local=Path(local);record=latest(persistent)
+def restore(persistent,local,identifier=None):
+    persistent=Path(persistent);local=Path(local)
+    record=verify(persistent,identifier) if identifier else latest(persistent)
     if not record:raise ValueError('No complete verified persistent snapshot. Incomplete uploads are ignored; never restarting silently.')
+    # Preflight ALL conflicts before writing anything. Restore into a fresh root
+    # if local work is newer/different; never replace a recorded source snapshot.
+    targets=[]
     for name,e in record['files'].items():
-        target=_safe(local,name);target.parent.mkdir(parents=True,exist_ok=True)
+        target=_safe(local,name)
         if target.exists() and file_digest(target)!=e['sha256']:
-            if name in ('profile.json','sync-status.json'):continue # current runtime reports are not training state
+            if name in ('profile.json','sync-status.json'):continue
             raise ValueError('Local file differs from persistent checkpoint; use a new empty local run directory: '+name)
+        targets.append((target,e))
+    for target,e in targets:
+        target.parent.mkdir(parents=True,exist_ok=True)
         if not target.exists():shutil.copyfile(_safe(persistent,'objects/'+e['sha256']),target)
-        if file_digest(target)!=e['sha256']:raise ValueError('Restored file checksum mismatch')
+        if target.stat().st_size!=e['bytes'] or file_digest(target)!=e['sha256']:raise ValueError('Restored file checksum mismatch')
     return record

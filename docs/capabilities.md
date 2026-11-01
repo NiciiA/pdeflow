@@ -343,3 +343,41 @@ Details/evidence: field-reconstruction-losses.md, field-loss-verification.md.
 | Native CUDA FP16 startup recovery | Guarded tests and exact original-job T4 procedure included | CUDA unavailable locally; must execute on T4 |
 
 See docs/anchor-fp16-recovery.md and outputs/anchor-fp16-recovery-20261031/.
+
+### Reconstruction diagnosis —1 November2026
+
+| Capability | Evidence | Scientific boundary |
+|---|---|---|
+| Immutable case, strict lineage, A1/oracle-A2/B and exact sensor CLI | CPU tests and actual saved Medium MPS replays; raw fields and shared-scale images | Matching Medium E/A2 missing; their oracle results explicitly unavailable |
+| Observation/permutation/padding/count/quantity and integrator controls | Actual heat/wave MPS measurements; final wave controls preserve quantities | Sensitivity is not useful conditioning or calibrated uncertainty |
+| Deterministic observation→initial latent head |20-update tiny-fixture CPU run; frozen tensors identical | Actual Medium run unexecuted; lower latent loss worsened decoded error in fixture |
+| Explicit observation-only latent correction with trust penalty | Actual20-step Medium MPS periodic-case improvement and heat/wave isolation tests | Changes samples; not retraining, exact conditioning or a PDE accuracy guarantee |
+| Noiseless observation mixture | Backward-compatible default0, explicit opt-in, finite CPU/MPS gradients, resume guard and actual counts | No new main-model training/accuracy experiment; CUDA untested |
+| Compact exact-sensor diagnostic view | Real saved-result API test, frontend render/type/build/lint | View alone does not establish field accuracy; no fabricated errors without data |
+
+See docs/reconstruction-diagnosis.md and outputs/reconstruction-diagnosis-20261101/.
+
+### Observation alignment and persistence (1 November 2026)
+
+| Capability | Status and evidence |
+|---|---|
+| B decoded endpoint Gaussian/tolerance objective | Implemented, beta0 baseline, bounded mixed-family microbatches and accumulation; real CPU/MPS gradients, frozen tensors checked |
+| A2 strong heat/wave residual training | Optional, FP32 derivatives through T/D, supervised dynamics retained; analytic and actual CPU/MPS gradient checks |
+| Domain MSE / region blend alpha.5 / WMSE / MAE | Existing semantics retained; new presets retain region blend; CPU affected regression coverage |
+| Phase-sensitive structured spectral field variant | Explicit opt-in with extra N² queries, real DFT on CPU/MPS; no scientific superiority claim |
+| Complete diagnostic/resumable persistence | Verified local filesystem snapshots, corruption/stale-pointer/retention/restore/fresh-process continuation; actual Drive integration UNTESTED |
+| New eight-step notebook | Actual local CPU cells, partial failed-gate save and fresh-runtime restore; real Colab/T4/CUDA UNTESTED |
+| Existing Medium inference compatibility | Strict old state load passes; B2500, missing matching E/A2 remains unrecoverable in supplied artifacts |
+| Accuracy, uncertainty calibration, Stage C, shocks/new families | Not established / deferred; no capacity expansion or substantial training |
+
+Evidence and known failures: observation-aligned-verification.md. Scientific
+formulas/configuration/save/restore: observation-aligned-training.md.
+
+### Standard-MSE new-run workflow
+
+Standard MSE is the default across backend/presets/UI/CLI/Colab; RB alpha.5 is
+explicit and experimental. A1 and decoded A2 apply the choice; other objectives
+and evaluation remain independent. Actual CPU notebook and browser executions
+verify both selections in saved checkpoints; existing batched/MPS regressions
+passed. CUDA/real Colab untested. Existing runs retain recorded semantics and
+source checks. Details/evidence: standard-mse-workflow.md.

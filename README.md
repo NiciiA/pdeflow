@@ -7,9 +7,11 @@ heat and wave equations. It generates initial physical states and unknown typed
 scalars, then predicts dynamics with a learned graph-conditioned evolution operator.
 There is no unrestricted trajectory latent or reference-solver inference shortcut.
 
-Only tiny execution checks have been run. The available new checkpoints have
-**two updates per stage and poor accuracy**, including worse-than-constant state
-representation. Resolution flexibility does not demonstrate fine-detail recovery.
+The repository contains two-update pipeline fixtures and a user-imported Medium
+model with **2,500 successful flow updates**. Its saved reconstructions are poor;
+[the reconstruction diagnosis](docs/reconstruction-diagnosis.md) separates actual
+sensor fit, initial-state error, oracle-stage availability and bounded correction.
+Resolution flexibility does not demonstrate fine-detail recovery.
 Historical Fourier-inverse superiority and non-monotonic test-budget results remain
 unchanged; no matched accuracy comparison of this architecture has been run.
 
@@ -70,7 +72,9 @@ The resolved summary shows the actual family probabilities, state schemas and ac
 parameter ranges; conflicting advanced family selections reject before execution.
 Pipeline check/Smoke exercises execution; Development/XSmall is a bounded first
 learning experiment, not an accuracy-qualified model. Budget and capacity remain
-separate. New runs select experimental region-balanced field loss, α=.5.
+separate. New runs select **Standard MSE**. Choose **Region-balanced MSE — experimental**
+explicitly to use the existing blend (starting α=.5). Only that choice shows
+region controls; Standard MSE adds zero region-training queries.
 Monitor stage/updates/validation; **Stop** saves at an optimizer boundary; **Resume**
 uses recorded objectives/dependencies. **Use model** makes a completed export
 available for explicit reconstruction selection. The representation gate compares
@@ -128,17 +132,28 @@ checkpoint/output/device arguments. Scientific evaluation is distinct from compl
 
 Use the [batch configure → benchmark → apply → train guide](docs/batch-settings.md) for the active training UI and Colab notebook. It includes per-stage sizes, explicit budget policies, and authoritative Session application. The [actual A1/A2 batching guide](docs/batched-training.md) records the earlier throughput work. The earlier [T4 performance recovery](docs/training-performance.md) records the reference/precision changes. The updated preflight uses two warmup/eight measured updates, native precision detection and separate setup, reference, compute, validation and persistence clocks.
 
-Open `notebooks/colab.ipynb`. Upload a current source ZIP or configure your own
-repository URL/revision. Set fast local and persistent roots. Choose FAMILIES
-heat/wave/joint, capacity, device/precision, loss and stage budgets. Inspect the
-training-only gallery and real three-stage preflight; then enable RUN_TRAINING.
-A1 learns state representation; A2 freezes it and learns evolution; B freezes both
-and learns conditional generation. Optional decoded auxiliary terms are off by default.
-Interrupt once or `session.stop()` for orderly saving/sync. Restore the same source,
-run name and recorded configuration to resume. Download `export/coordinate.pt` and
-its provenance JSON, then import on the Mac. No Drive path or external encoder is
-required for inference. **Actual Colab/CUDA execution remains unverified**; local
-execution of the actual notebook cells on CPU is separate evidence.
+Open `notebooks/colab.ipynb` from the latest source ZIP. Its eight steps cover source
+verification, Drive mount/probe, science, optional benchmarks, explicit application,
+training/resume, **Save and verify complete run**, and optional diagnostics.
+[Exact settings, equations, save/restore and bounded ablations](docs/observation-aligned-training.md).
+New runs use unique IDs separate from display names; keep the printed RUN_ID.
+First-checkpoint, successful-update cadence and stage/final snapshots retain the
+full encoder, dependencies, optimizers/scalers/RNG and exact source. Three manifest
+views distinguish inference, diagnostic and resumable artifacts without duplicate
+weight bundles. Restore uses recorded science and verified manifests; it never
+substitutes today's preset or an unrelated encoder.
+
+A1 learns representation, A2 freezes it and learns supervised evolution, B freezes
+both and learns conditional generation. New runs default to Standard MSE; region-balanced alpha=.5 is explicit and
+experimental; baseline FM remains the default B objective. The separate explicit
+`joint.observation_auxiliary` adds batched decoded clean-endpoint Gaussian/tolerance
+supervision when enabled. Optional A2 physics and structured phase-sensitive
+spectral field loss remain off unless selected. No change demonstrates accuracy.
+The failed representation gate remains a stop. Interrupt once or `session.stop()`
+for orderly saving, then `session.finalize()` for complete verification. Download
+`export/coordinate.pt` for inference on the Mac; retain the diagnostic/resumable
+store for recovery. **Actual Colab/Drive/CUDA execution of this revision is
+unverified**; local execution of the actual notebook cells is separate evidence.
 
 ```bash
 python scripts/package_source.py --output outputs/pdeflow-operator-wave-source.zip
@@ -161,3 +176,30 @@ Colab FP16 anchor failure/reload: [bounded recovery and T4 verification](docs/an
 The two-attempt anchor bug is repaired; skipped gradients are no longer labelled
 finite, and cell4 displays failures and tracebacks. CPU scaler-control and MPS
 checks are separate from native CUDA/T4 verification, which remains outstanding.
+
+## Diagnose a saved heat/wave reconstruction
+
+The shared CLI captures immutable measurements/reference/noise and evaluates A1,
+true-initial-state A2 and production B separately. Matching A2 is required for an
+omitted encoder; a portable export alone never substitutes a random encoder.
+
+```bash
+pdeflow coordinate-diagnostic-case --checkpoint MODEL.pt --job JOB_DIRECTORY --output NEW_CASE
+pdeflow coordinate-diagnose --checkpoint MODEL.pt --case NEW_CASE --output NEW_REPORT --device mps
+```
+
+See [exact case commands, measured results and limits](docs/reconstruction-diagnosis.md).
+The collapsed **Reconstruction diagnostics** view shows ensemble errors at exact
+sensors, separately from whole-field error. Experimental latent correction is a
+separate explicit command, not a retrained model or calibrated posterior. New
+training may opt into `joint.noiseless_probability`; its default0 preserves old
+sampling, and resume changes are rejected. The existing region-balanced alpha=.5 option is preserved, while new runs default to Standard MSE.
+
+Current field-loss workflow: [Standard versus experimental region-balanced MSE](docs/standard-mse-workflow.md).
+The selection affects A1 and decoded A2 only. Training loss controls learning;
+display metrics only change evaluation. CLI new-run selection, without launching:
+
+```bash
+pdeflow training start --plan --device cpu --field-loss mse
+pdeflow training start --plan --device cpu --field-loss region_balanced_mse --field-alpha 0.5
+```
