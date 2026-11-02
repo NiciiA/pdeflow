@@ -1022,3 +1022,18 @@ zero-noise supervision is not an ensemble mean. M4 straight physical-state FM
 and M5 discrete cosine VP-v are genuinely distinct. No sampling conversion or
 exact posterior guarantee is asserted. Complete wave presets, c² convention,
 matched velocities, periodic pulses and zero-mode formulas are in mesh-family.md.
+
+
+## Mesh numerical precision boundaries —2 November2026
+
+Autocast can reduce a matrix product even when its operands have been explicitly
+cast to float32. Mesh sensor QK products, streaming weighted-value accumulations
+and decoder kernel products now execute under autocast-disabled FP32. Linear/
+backbone layers keep the explicitly resolved AMP policy. Softmax/normalizers and
+physical-state carrier remain FP32; known scalar assignment is exact in that dtype.
+Explicit scalar/anchor squared-error helpers cast before subtraction/squaring.
+Whole-field shared differentiable MSE already used FP32. No change to quadrature,
+per-example/quantity/family weights, region balancing, time distributions, objective
+terms or optimization schedule. No nan replacement or arbitrary clamping. This
+repairs a demonstrated finite-operand FP16 overflow path; it does not prove the
+remote long-run failure originated there or guarantee stable future optimization.

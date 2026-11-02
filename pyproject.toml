@@ -21,7 +21,7 @@ pdeflow = "pdeflow.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pdeflow = ["presets/*.json", "coordinate/profiles/*.json"]
+pdeflow = ["presets/*.json", "coordinate/profiles/*.json", "mesh/patches/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

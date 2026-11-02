@@ -233,7 +233,13 @@ def _child_progress(path, record):
         stage=record['stage']
         if stage not in p['updates']:stage=next((s for s in reversed(list(p['updates'])) if (path/'stages'/s/'run.json').exists()),stage)
         directory=path/'stages'/stage;file=directory/'run.json'
-        return (read_json(file),read_json(directory/'history.json')[-200:]) if file.exists() and (directory/'history.json').exists() else ({},[])
+        child,history=(read_json(file),read_json(directory/'history.json')[-200:]) if file.exists() and (directory/'history.json').exists() else ({},[])
+        live=path/'progress.json'
+        if live.exists():
+            snapshot=read_json(live)
+            if snapshot.get('stage')==stage:
+                child={**child,'stage':stage,'progress':snapshot.get('successful_updates',child.get('progress',0))};history=snapshot.get('history') or history
+        return child,history
     directory = path / ('evolution' if record['stage']=='evolution' else 'coordinate-ae' if record['stage'] in ('prepare', 'representation', 'representation_validation') else 'coordinate-flow')
     if p['model'] == 'fixed-grid':
         directory = path / 'fixed'

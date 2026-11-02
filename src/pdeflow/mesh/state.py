@@ -20,7 +20,7 @@ def active_mask(c,known,families):
 
 
 def enforce(c,state,parameter,known,families):
-    mask=active_mask(c,known,families);out=state*mask.to(state.dtype);out=out.clone();out[:,-1,0]=torch.where(known,parameter,out[:,-1,0]);return out
+    mask=active_mask(c,known,families);out=state.float()*mask.to(torch.float32);out=out.clone();out[:,-1,0]=torch.where(known,parameter,out[:,-1,0]);return out
 
 
 def pack(values,parameter):

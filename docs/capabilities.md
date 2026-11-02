@@ -445,3 +445,15 @@ execution are unverified. See spatial-conditioning.md.
 The new slice supports periodic Cartesian2D heat/wave only. Existing1D–3D,
 Darcy, chemistry and steering paths remain separate. No arbitrary geometry/PDE
 generalization or tiny-model accuracy claim. See mesh-family.md.
+
+
+## Mesh stability/monitoring release
+
+Implemented: explicit sensitive-product FP32 boundaries, pre-backward finite checks,
+healthy-checkpoint protection, immutable replay diagnostics, original-source batch
+comparison, exact source-pinned full-state M1 continuation, primary-cell live
+progress for models/suites, read-only local/committed-store status, checkpoint/Drive
+status and measured/provisional ETA. CPU numerical/lifecycle and MPS bounded
+execution tested. Actual2269-update failure/healthy remote checkpoint/CUDA/T4/live
+Colab/Drive execution unverified. No generic source override or accuracy claim.
+Evidence and exact recovery procedures: mesh-training-recovery.md.

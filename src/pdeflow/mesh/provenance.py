@@ -20,7 +20,7 @@ def read_checkpoint(path):
     if cp.get('state_contract')!='normalized_physical_nodes_u0_v0_log_parameter_v1':raise ValueError('Unsupported physical-state tensor contract')
     training=set(cp['training_ids'])
     if not set(sum(cp['normalization_fitted_ids'].values(),[]))<=training:raise ValueError('Normalization leaks nontraining identities')
-    if cp['attempted_updates']!=cp['successful_updates']+cp['skipped_updates']:raise ValueError('Mesh optimizer counter semantics mismatch')
+    if cp['attempted_updates']!=cp['successful_updates']+cp['skipped_updates']+cp.get('failed_attempts',0):raise ValueError('Mesh optimizer counter semantics mismatch')
     if cp.get('model_partial_frozen_modules'):
         dependency=cp.get('dependency')
         if not dependency:raise ValueError('Partial model is missing its frozen prerequisite')

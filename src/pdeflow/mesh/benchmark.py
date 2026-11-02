@@ -1,8 +1,8 @@
 """Disposable actual-candidate/objective preflight; never changes a requested workload."""
 from dataclasses import replace
 from pathlib import Path
-import tempfile,time,statistics
-from pdeflow.runtime import digest,read_json
+import tempfile,time,statistics,shutil,uuid,traceback
+from pdeflow.runtime import digest,read_json,write_json
 from .contracts import MeshConfig
 from .training import train_stage
 from .provenance import scientific_source
@@ -19,7 +19,17 @@ def profile(c,local_root,updates=8,warmup=2):
         with tempfile.TemporaryDirectory(prefix='mesh-preflight-',dir=local_root) as directory:
             pc=replace(c,budgets={s:updates for s in c.budgets},checkpoint_every=updates,validation_every=updates);dependency=None
             for stage in c.kind['stages']:
-                record=train_stage(pc,directory,stage,dependency);rows=read_json(Path(directory)/'stages'/stage/'history.json');measured=[r for r in rows if not r['optimizer_update_skipped']][warmup:]
+                try:record=train_stage(pc,directory,stage,dependency)
+                except BaseException:
+                    original_trace=traceback.format_exc()
+                    try:
+                        kept=Path(local_root)/('mesh-preflight-failed-'+uuid.uuid4().hex);shutil.copytree(directory,kept)
+                        from pdeflow.source_bundle import package
+                        identity=package(kept/'source/source.zip');identity['scientific_source']=scientific_source();write_json(kept/'source/identity.json',identity);write_json(kept/'preflight-error.json',{'requested_config':c.to_dict(),'profile':report,'stage':stage,'traceback':original_trace,'scope':'Disposable short preflight failed; original production run unchanged'})
+                        print('Preflight failure diagnostics retained:',kept,flush=True)
+                    except Exception as save_error:print('Preflight diagnostic retention also failed; original error retained:',save_error,flush=True)
+                    raise
+                rows=read_json(Path(directory)/'stages'/stage/'history.json');measured=[r for r in rows if not r['optimizer_update_skipped']][warmup:]
                 seconds=[r['step_seconds'] for r in measured];reference=[r['reference_host_seconds'] for r in measured]
                 report['stages'][stage]={'warmup_rows':rows[:warmup],'median_seconds_per_successful_update':statistics.median(seconds),'minimum':min(seconds),'maximum':max(seconds),'p90':sorted(seconds)[min(len(seconds)-1,int(.9*len(seconds)))],'examples_per_second':c.batch_size/statistics.median(seconds),'median_reference_host_seconds':statistics.median(reference),'cold_first_update_seconds':rows[0]['step_seconds'],'setup_seconds':record['setup_seconds'],'training_wall_seconds':record['training_seconds'],'memory':record['memory'],'actual_forward_microbatch':measured[0]['actual_forward_microbatch'],'skipped_updates':record['skipped_updates'],'rough_training_seconds_excluding_setup_evaluation_export':statistics.median(seconds)*c.budgets[stage],'measured_rows':measured}
                 dependency=Path(directory)/'stages'/stage/'resume.pt'

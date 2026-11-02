@@ -1213,3 +1213,63 @@ Task-owned services were API8099/PID3243 and Vite5199/PID2883, stopped after all
 real reconstruction jobs succeeded. No user training was running/terminated.
 Git remains uncommitted, HEAD28b6a30; no staging/reset/commit attempted. Previous
 unstaged/untracked work is preserved. No automatic approval rejection in this task.
+
+## Mesh numerical stability and live monitoring —2 November2026
+
+New execution evidence: outputs/mesh-stability-20261102. No local training worker
+was active before scientific edits. Source matched the supplied failure fingerprint
+4439ad180a5653dcf5af057c94c2d78112c282e6575a94f745ed1176dd6713cd exactly.
+The actual remote run48d3c84f7a19/config/checkpoints/history are unavailable locally;
+no actual failing-batch reproduction, healthy remote update or CUDA claim.
+
+Confirmed operator defect: float() operands inside autocast still yield FP16
+matrix products. Finite projected Q/K overflow and an independent unnormalized
+weighted-value numerator overflow are covered. Corrected sensor output/gradients
+are finite under CPU FP16 operator tests. Whole-field MSE was already FP32; narrow
+FP32 products/kernel accumulation, explicit scalar/anchor reductions and physical
+state carrier are implemented without architecture/data/loss/LR/schedule changes.
+This does not prove the remote failure originates there or that optimization is stable.
+
+| Check | Actual evidence |
+|---|---|
+| Main affected suite | 42 passed, final-tests.txt: numeric/heat-wave/mixed-batch gradients, failure/gradient handling, checkpoint protection, counters, model lifecycle, recovery, inference isolation and persistence |
+| Additional integration | 13 passed, final-integration-tests.txt: actual IPython display publishing, preflight failure retention, primary notebook execution, original-source continuation |
+| Final adapters | 12 passed, final-adapter-tests.txt: committed-store read-only status, source-pinned continuation/collector/replay, notebook and managed workflow progress |
+| Numerator/known-input AMP | 1 passed, value-accumulation-test.txt: streaming numerator overflow fixed, known normalized scalar exact FP32, inactive heat-v masked |
+| CPU before/after | precision-before/after.json: reader nonfinite→finite; finite operands alone do not fix an autocast product |
+| MPS | Eight pipeline updates with live output/validation/checkpoint/local persistence; healthy saved model/optimizer, mps-evidence.json |
+| Medium MPS | Two updates at width256/depth8/heads8/nodes16²/coarse4²/global8/neighbors4, batch/micro8,Q256,reference32²,train8192,joint MSE. Independent preset, NOT actual failed-run config. Finite losses/gradients/healthy checkpoint. Loss2.093→36.314 on different batches; preclip norms4.95→163.44. No convergence/stability claim; too few measured steps for ETA. medium-mps-probe.json |
+| Original source recovery | One-update original-source parent→three-update corrected continuation retained optimizer/scaler/scheduler/RNG/progress. Final CPU weights bitwise equal to original-source uninterrupted3-update baseline. Not remote-run reproduction |
+| Failure safety | Invalid forward checked before backward; invalid gradients never stepped; fatal handler never overwrites resume.pt; checkpoint SHA unchanged under fault injection; diagnostic and Drive failure preserve original error and local records |
+| Notebook | All8 cells executed from fresh source for CPU single/suite, local verified restore; primary live output appears before return. Actual Colab/Drive not executed |
+| Frontend | Source UI unchanged; prior73-test/build evidence reused. Managed backend live-record adapter tests rerun; no unnecessary frontend rebuild |
+
+Counters distinguish successful/skipped/failed attempts. An immutable healthy
+checkpoint keeps counters at its saved boundary; later failed attempts remain in
+separate immutable failure reports/live status and are not forged into old bytes.
+Resume rolls back to that verified saved state. Monitoring performs bounded reads,
+no model initialization, full-file scans, inference or training RNG/sampler updates.
+Committed-store status does not claim remote liveness or full object revalidation.
+Quality gates remain enforced. Failed suites stop; explicit selected-candidate retry
+cannot restart a verified completed model. Corrected-source continuation is a NEW
+M1 run under the exact stability_v1 source manifest, not a broad source override.
+Read-only collection and exact original-source one-batch tools are in scripts/;
+complete commands/limitations are in mesh-training-recovery.md.
+
+Final archive/fresh-extraction and preservation checks are recorded in the task's
+packaging.json, fresh-source-verification.json and preservation-after.json. All old checkpoints/datasets/results/source archives remain unchanged, but the
+inherited notebook test overwrote two prior execution logs. See the preservation
+exception below. No services were launched for this
+turn, no user worker stopped, no commit/staging/reset performed. Actual CUDA/T4,
+remote2269 failure and mounted Colab/Drive remain unverified. No model accuracy or
+long-run stability improvement is claimed.
+
+
+Preservation audit exception for this stability task: of20,782 baseline output
+files,20,780 are unchanged. notebook-single/execution.txt and notebook-suite/
+execution.txt under outputs/mesh-family-20261102 were overwritten by the inherited
+fixed-path notebook test. Original bytes are unavailable locally; hashes/sizes and
+replacement copies are preserved in mesh-stability-20261102/preservation-exception.json.
+The harness now defaults to temporary evidence, or an explicitly selected destination.
+No checkpoint/dataset/model result/source archive/manifest changed. The older raw
+notebook execution-log links must not be treated as original evidence.

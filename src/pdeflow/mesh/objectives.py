@@ -1,6 +1,7 @@
 """Decoded physical objectives, candidate scoring, and optional soft consistency."""
 import torch
 from pdeflow.field_losses import differentiable_loss,settings as field_settings
+from .numerical import squared_error
 from .state import active_mask,group_loss,enforce,parameter_physical
 from .sampling import fgn_noise,flow_path,flow_endpoint,diffusion_path,diffusion_endpoint,diffusion_schedule
 
@@ -35,8 +36,8 @@ def supervised(model,state,batch):
     c=model.c;initial=predictions(model,state,batch,True);l0=field_loss(c,initial,batch.y0,batch.w0,batch.families);lt=torch.zeros_like(l0)
     wi=c.objective.get('initial',1. if not c.kind['trajectory'] else .5);wt=c.objective.get('trajectory',.5) if c.kind['trajectory'] else 0.
     if c.kind['trajectory']:lt=field_loss(c,predictions(model,state,batch,False),batch.yt,batch.wt,batch.families)
-    scalar=(state[:,-1,0]-batch.target_state[:,-1,0]).square()*(~batch.known)
-    nodal=(state[:,:c.nodes]-batch.target_state[:,:c.nodes]).square().mean(1);anchor=quantity_mean(nodal,batch.families)
+    scalar=squared_error(state[:,-1,0],batch.target_state[:,-1,0])*(~batch.known)
+    nodal=squared_error(state[:,:c.nodes],batch.target_state[:,:c.nodes]).mean(1);anchor=quantity_mean(nodal,batch.families)
     spectral=torch.zeros_like(l0);spec=field_settings(c.field_loss)
     if spec.spectral_weight>0:
         from .geometry import regular

@@ -16,6 +16,10 @@ def architecture(value):
 
 def main(argv=None):
     p=argparse.ArgumentParser(description='PDEFlow observation-informed physical mesh candidates; no AE latent targets');sub=p.add_subparsers(dest='command',required=True)
+    a=sub.add_parser('status');a.add_argument('--run',required=True);a.add_argument('--watch',action='store_true');a.add_argument('--refresh',type=float,default=5.)
+    a=sub.add_parser('health');a.add_argument('--checkpoint',required=True)
+    a=sub.add_parser('replay');a.add_argument('--failure',required=True);a.add_argument('--device',default='cpu');a.add_argument('--output',required=True)
+    a=sub.add_parser('corrected-continuation');a.add_argument('--parent-run',required=True);a.add_argument('--local-root',required=True);a.add_argument('--persistent-root');a.add_argument('--device')
     a=sub.add_parser('plan');a.add_argument('--candidate',type=architecture,default='mesh_m1_v1');a.add_argument('--capacity',default='pipeline-check');a.add_argument('--updates',type=int);a.add_argument('--device',default='cpu');a.add_argument('--precision',default='auto');a.add_argument('--output')
     for command in ('train','preflight'):
         a=sub.add_parser(command);a.add_argument('--config',required=True);a.add_argument('--output',required=True);a.add_argument('--persistent');a.add_argument('--stop-after',type=int)
@@ -33,7 +37,26 @@ def main(argv=None):
         a=sub.add_parser(command);a.add_argument('--root',required=True);a.add_argument('--persistent');a.add_argument('--candidate',action='append')
     a=sub.add_parser('suite-restore');a.add_argument('--persistent-root',required=True);a.add_argument('--run-id',required=True);a.add_argument('--local-root',required=True);a.add_argument('--snapshot')
     args=p.parse_args(argv);command=args.command
-    if command=='plan':
+    if command=='status':
+        from .monitoring import status,text_summary
+        if args.refresh<1:raise ValueError('CLI refresh must be at least1 second')
+        while True:
+            result=status(args.run)
+            if not args.watch:break
+            print(text_summary(result),flush=True)
+            try:__import__('time').sleep(args.refresh)
+            except KeyboardInterrupt:return
+        print(json.dumps(result,indent=2,allow_nan=False));return
+    elif command=='health':
+        from .diagnostics import checkpoint_health
+        result=checkpoint_health(args.checkpoint)
+    elif command=='replay':
+        from .diagnostics import replay_failure
+        result=replay_failure(args.failure,args.device);write_json(args.output,result)
+    elif command=='corrected-continuation':
+        from .recovery import corrected_continuation
+        session=corrected_continuation(args.parent_run,args.local_root,args.persistent_root,args.device);result={'new_root':str(session.root),'persistent':str(session.persistent),'parent_preserved':True,'not_exact_resume':True,'next':'Preflight the new source, then use resume on this NEW run root'}
+    elif command=='plan':
         overrides={'budgets':{s:args.updates for s in MeshConfig().budgets}} if args.updates else None;c=preset(args.capacity,args.candidate,args.device,args.precision,overrides);result=plan(c)
         if args.output:write_json(args.output,c.to_dict())
     elif command in ('train','preflight'):

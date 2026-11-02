@@ -642,3 +642,11 @@ training/validation/inference/lifecycle/evaluation modules remain separate. This
 periodic2D slice does not reduce the broader chemistry/1D–3D/steering purpose.
 Exact contracts, stages, formulas, parameter counts and unsupported combinations:
 mesh-family.md. Earlier architecture sections describe semantic or legacy contracts.
+
+
+Mesh stability layer: numerical.py owns narrow FP32 product/reduction boundaries;
+diagnostics.py owns exceptional replay/health checks; monitoring.py owns bounded
+progress records/read-only views; recovery.py owns the exact audited source
+transition. Monitoring never initializes a model or advances training RNG. Ordinary
+resume stays source-strict; corrected M1 continuation is a separate lineage-bearing
+run. Architecture/state layout, scientific data/objectives and defaults are unchanged.

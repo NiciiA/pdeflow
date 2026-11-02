@@ -1,12 +1,13 @@
 """Explicit individual/suite execution, durable candidate order and no silent restarts."""
 from pathlib import Path
 from dataclasses import replace
-import time,uuid,shutil
+import time,uuid,shutil,traceback
 from pdeflow.runtime import write_json,read_json,digest,file_digest
 from pdeflow.local import run_lock,is_locked
 from .contracts import CANDIDATES,preset,MeshConfig
 from .session import MeshSession,plan
 from .provenance import scientific_source
+from .monitoring import sync_store
 
 
 def suite_plan(capacity='medium',device='cuda',precision='auto',candidates=None,overrides=None,include_legacy=False):
@@ -30,8 +31,7 @@ class Suite:
     def inspect(self):return read_json(self.root/'suite.json')
     def sync(self,tag):
         if self.persistent:
-            from pdeflow.persistence import publish
-            return publish(self.root,self.persistent,keep=3,tag=tag)
+            return sync_store(self.root,self.persistent,keep=3,tag=tag)
     def stop(self):
         write_json(self.root/'stop-request.json',{'time':time.time()});record=self.inspect();active=record.get('active')
         if active:write_json(self.root/'runs'/active/'stop-request.json',{'time':time.time()})
@@ -58,18 +58,26 @@ class Suite:
                     continue
                 if (self.root/'stop-request.json').exists():break
                 record.update(state='running',active=name);write_json(self.root/'suite.json',record)
-                if name=='legacy_factorized_v2':
-                    from pdeflow.colab import Session
-                    session=Session(record['plan']['legacy_config'],name,self.root/'runs',self.root/'unused-store',allow_cpu_check=True,persistence_enabled=False);outcome=session.run(mode='resume' if (session.root/'session.json').exists() else 'new',override_gate=False);session.finalize()
-                else:
-                    c=MeshConfig(**record['plan']['configs'][name]).validate();session=MeshSession(c,self.root/'runs'/name)
-                    if not (session.root/'source/source.zip').exists():
-                        (session.root/'source').mkdir(exist_ok=True);shutil.copy2(self.root/'source/source.zip',session.root/'source/source.zip');shutil.copy2(self.root/'source/identity.json',session.root/'source/identity.json')
-                    if max(c.budgets[s] for s in c.kind['stages'])>20:
-                        profiles=read_json(self.root/'profiles.json') if (self.root/'profiles.json').exists() else {};profile=profiles.get(name)
-                        if not profile or not profile['success'] or profile['requested_config']!=digest(c.to_dict()) or profile['scientific_source']!=scientific_source()['sha256']:raise ValueError('Run preflight for the exact selected candidate/objective before substantial suite training')
-                        write_json(session.root/'profile.json',profile)
-                    outcome=session.run(event=lambda e:self.sync('candidate-checkpoint'))
+                if previous.get('state')=='failed' and not selected:raise ValueError('Failed suite candidate requires explicit selected=[candidate] retry after diagnosis; completed candidates remain skipped')
+                try:
+                    if name=='legacy_factorized_v2':
+                        from pdeflow.colab import Session
+                        session=Session(record['plan']['legacy_config'],name,self.root/'runs',self.root/'unused-store',allow_cpu_check=True,persistence_enabled=False);outcome=session.run(mode='resume' if (session.root/'session.json').exists() else 'new',override_gate=False);session.finalize()
+                    else:
+                        c=MeshConfig(**record['plan']['configs'][name]).validate();session=MeshSession(c,self.root/'runs'/name)
+                        if not (session.root/'source/source.zip').exists():
+                            (session.root/'source').mkdir(exist_ok=True);shutil.copy2(self.root/'source/source.zip',session.root/'source/source.zip');shutil.copy2(self.root/'source/identity.json',session.root/'source/identity.json')
+                        if max(c.budgets[s] for s in c.kind['stages'])>20:
+                            profiles=read_json(self.root/'profiles.json') if (self.root/'profiles.json').exists() else {};profile=profiles.get(name)
+                            if not profile or not profile['success'] or profile['requested_config']!=digest(c.to_dict()) or profile['scientific_source']!=scientific_source()['sha256']:raise ValueError('Run preflight for the exact selected candidate/objective before substantial suite training')
+                            write_json(session.root/'profile.json',profile)
+                        outcome=session.run(event=lambda e:self.sync('candidate-checkpoint'))
+                except BaseException as error:
+                    record['candidates'][name]={'state':'failed','error':str(error),'traceback':traceback.format_exc()};record.update(state='failed',active=name,error=str(error));write_json(self.root/'suite.json',record)
+                    try:self.sync('candidate-failed')
+                    except Exception as save_error:
+                        record['persistent_save_error']=str(save_error);write_json(self.root/'suite.json',record)
+                    raise
                 record['candidates'][name]={'state':outcome['state'],'root':str(session.root),'stages':outcome.get('stages')};write_json(self.root/'suite.json',record);self.sync('candidate-transition')
                 if outcome['state']!='completed':record.update(state='needs_review' if outcome['state']=='needs_review' else 'interrupted');write_json(self.root/'suite.json',record);return record
             record.update(state='completed' if all(record['candidates'].get(n,{}).get('state')=='completed' for n in record['plan']['order']) else 'partial',active=None);write_json(self.root/'suite.json',record);self.sync('suite-final');return record

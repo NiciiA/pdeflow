@@ -3,6 +3,7 @@ import math
 import torch
 from torch import nn
 from .geometry import Geometry,LocalGraph,periodic_features
+from .numerical import fp32_matmul
 from pdeflow.coordinate.model import Attention,Block
 
 
@@ -34,10 +35,10 @@ class SensorReader(nn.Module):
                 position=periodic_features(delta);time=t[:,None,low:high].expand(-1,stop-start,-1,-1);kind=torch.nn.functional.one_hot(quantities[:,low:high],3)[:,None].expand(-1,stop-start,-1,-1).to(position.dtype)
                 bias=self.bias(torch.cat([position,time,kind],-1)).squeeze(-1)
                 if low==0:bias=torch.cat([torch.zeros_like(bias[:,:,:1]),bias[:,:,1:]],-1)
-                logits=Q@keys[:,low:high].float().transpose(-1,-2)/math.sqrt(self.c.width)+bias.float();logits=logits.masked_fill(~mask[:,None,low:high],-torch.inf);current=logits.amax(-1,keepdim=True)
-                if maximum is None:maximum=current;weight=(logits-maximum).exp();den=weight.sum(-1,keepdim=True);num=weight@values[:,low:high].float()
+                logits=fp32_matmul(Q,keys[:,low:high].transpose(-1,-2))/math.sqrt(self.c.width)+bias.float();logits=logits.masked_fill(~mask[:,None,low:high],-torch.inf);current=logits.amax(-1,keepdim=True)
+                if maximum is None:maximum=current;weight=(logits-maximum).exp();den=weight.sum(-1,keepdim=True);num=fp32_matmul(weight,values[:,low:high])
                 else:
-                    new=torch.maximum(maximum,current);factor=(maximum-new).exp();weight=(logits-new).exp();den=den*factor+weight.sum(-1,keepdim=True);num=num*factor+weight@values[:,low:high].float();maximum=new
+                    new=torch.maximum(maximum,current);factor=(maximum-new).exp();weight=(logits-new).exp();den=den*factor+weight.sum(-1,keepdim=True);num=num*factor+fp32_matmul(weight,values[:,low:high]);maximum=new
             pieces.append((num/den).to(queries.dtype))
         return self.out(torch.cat(pieces,1))
 

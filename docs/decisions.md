@@ -1012,3 +1012,31 @@ A1 UI wording and new loss-preview routing were corrected during integration.
 Missing historical costs are null, never invented zeros. Scientific-source
 changes require the recorded source on resume; inference loading stays explicit
 and strict on actual architecture/tensors. No substantial training or gate bypass.
+
+
+## Mesh stability and monitoring —2 November2026
+
+Original scientific source exactly matches supplied4439ad18… fingerprint; actual
+run48d3c84f7a19/checkpoints/config/history unavailable locally. Do not claim its
+2269th-state health, exact failed-batch replay or FP16 startup overflow. An operator
+reproduction demonstrates that .float operands do not disable autocast matmul: the
+streaming reader produces nonfinite values for finite large logits. Narrow FP32
+products/kernel accumulation and explicit loss/state precision fix that demonstrated
+defect without changing architecture/objective/batch/LR/schedule or silently
+falling back silently to FP32 training. Whole-field MSE was already accumulated in FP32.
+
+Nonfinite forward/components are rejected before backward; invalid accumulated
+grads cleared, immutable failure/batch/replay records saved. Error handling never
+replaces resume.pt. Healthy model/optimizer validation protects checkpoints and
+resume, previous healthy checkpoint retained, scaler-only skips remain bounded
+and distinct from failed attempts. Monitoring reads bounded local metadata and
+committed store metadata, not model weights or full trees. Primary cell publishes
+while blocking; second same-kernel cell is not concurrent monitoring.
+
+Exact resume stays strict. Corrected-source continuation is a new M1 experiment
+with immutable parent checkpoint/source, all optimizer/scaler/scheduler/RNG/progress
+retained and full lineage. Only exact published original/corrected fingerprints
+in stability_v1 are supported; no general source override/hash editing. Other
+stage/source conversions remain unsupported. Read-only collector and original-
+source one-batch diagnostic enable actual T4 diagnosis without replacing old code.
+Details: mesh-training-recovery.md.

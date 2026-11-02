@@ -9,6 +9,7 @@ from .contracts import MeshConfig,CANDIDATES,model_contract
 from .provenance import scientific_source,read_checkpoint,counts
 from .training import train_stage
 from . import artifacts
+from .monitoring import Reporter,phase,sync_store
 
 
 def plan(c):
@@ -45,8 +46,7 @@ class MeshSession:
     def stop(self):write_json(self.root/'stop-request.json',{'time':time.time(),'policy':'Stop after current optimizer boundary and save complete state'})
     def sync(self,tag=None):
         if self.persistent:
-            from pdeflow.persistence import publish
-            return publish(self.root,self.persistent,keep=self.keep_snapshots,tag=tag)
+            return sync_store(self.root,self.persistent,keep=self.keep_snapshots,tag=tag)
         return None
     def _source(self):
         source=self.root/'source/source.zip';current=scientific_source()
@@ -56,8 +56,9 @@ class MeshSession:
         else:
             from pdeflow.source_bundle import package
             identity=package(source);identity['scientific_source']=current;write_json(source.with_name('identity.json'),identity)
-    def run(self,stop_after=None,owned=False,event=None,extend=False,fixed_subset=False):
+    def run(self,stop_after=None,owned=False,event=None,extend=False,fixed_subset=False,progress=None):
         with nullcontext() if owned else run_lock(self.root):
+            reporter=Reporter(self.root,self.c,self.c.kind['stages'][0],callback=progress);reporter.update('initialization',force=True)
             manifest=self.root/'session.json';old=read_json(manifest) if manifest.exists() else {}
             if old and model_contract(MeshConfig(**old['config']).validate())!=model_contract(self.c):raise ValueError('Incompatible session configuration; use a NEW experiment')
             if old and old['config']['budgets']!=self.c.budgets and not extend:raise ValueError('Changing budgets requires explicit session.extend(stage, additional)')
@@ -65,8 +66,11 @@ class MeshSession:
             if max(self.c.budgets[s] for s in self.c.kind['stages'])>20:
                 profile=read_json(self.root/'profile.json') if (self.root/'profile.json').exists() else None
                 if not profile or not profile['success'] or profile['requested_config']!=digest(self.c.to_dict()) or profile['scientific_source']!=scientific_source()['sha256']:raise ValueError('Run preflight for this exact candidate/objective/configuration before substantial training')
-            record={**old,'schema':'mesh_session_v1','config':self.c.to_dict(),'initial_config':old.get('initial_config',self.c.to_dict()),'scientific_source':scientific_source(),'state':'preparing','progress':0,'pid':__import__('os').getpid(),'save_updates':self.save_updates,'keep_snapshots':self.keep_snapshots,'persistent':str(self.persistent) if self.persistent else None,'stages':old.get('stages',{}),'source_policy':'Strict recorded source/config; no AE stage exists'}
-            (self.root/'stop-request.json').unlink(missing_ok=True);self._source();write_json(manifest,record);write_json(self.root/'resolved-config.json',self.c.to_dict());self.sync('before-training')
+            record={**old,'schema':'mesh_session_v1','config':self.c.to_dict(),'initial_config':old.get('initial_config',self.c.to_dict()),'scientific_source':scientific_source(),'state':'preparing','progress':old.get('progress',0),'pid':__import__('os').getpid(),'save_updates':self.save_updates,'keep_snapshots':self.keep_snapshots,'persistent':str(self.persistent) if self.persistent else None,'stages':old.get('stages',{}),'source_policy':'Strict recorded source/config; no AE stage exists'}
+            (self.root/'stop-request.json').unlink(missing_ok=True);self._source();write_json(manifest,record);write_json(self.root/'resolved-config.json',self.c.to_dict())
+            try:self.sync('before-training')
+            except BaseException as error:
+                record.update(state='failed',error=str(error),traceback=traceback.format_exc());write_json(manifest,record);phase(self.root,'failed',error=str(error));raise
             def checkpoint(e):
                 stage=e['stage'];record.update(stage=stage,progress=e['record']['progress'],state=e['record']['state']);record['stages'][stage]={'successful_updates':e['record']['progress'],'completed':e['record']['state']=='completed'};write_json(manifest,record)
                 if event:event(e)
@@ -78,16 +82,17 @@ class MeshSession:
                     if path.exists():cp,prior=read_checkpoint(path)
                     complete=bool(cp and cp['completed'] and cp['successful_updates']==self.c.budgets[stage])
                     if not complete:
-                        result=train_stage(self.c,self.root,stage,dependency,resume=path.exists(),stop_after=stop_after,should_stop=lambda:(self.root/'stop-request.json').exists(),event=checkpoint,extend=extend,fixed_subset=fixed_subset,checkpoint_policy=lambda s,k:k==1 or k%self.save_updates==0)
+                        result=train_stage(self.c,self.root,stage,dependency,resume=path.exists(),stop_after=stop_after,should_stop=lambda:(self.root/'stop-request.json').exists(),event=checkpoint,extend=extend,fixed_subset=fixed_subset,checkpoint_policy=lambda s,k:k==1 or k%self.save_updates==0,progress=progress)
                         if result['state']!='completed':record.update(state='interrupted');write_json(manifest,record);self.finalize();return record
                     cp,_=read_checkpoint(path);dependency=path;quality=cp['validation'];record['stages'][stage]={'successful_updates':cp['successful_updates'],'completed':True,'validation':quality,'checkpoint_sha256':file_digest(path)};write_json(manifest,record);self.sync('stage-complete')
                     if not self.c.pipeline_check and quality and not quality['passed']:
                         record.update(state='needs_review',gate={'stage':stage,'ratio':quality['mse_ratio'],'meaning':'Inspect/improve this candidate before later stages/suite; no automatic bypass'});write_json(manifest,record);self.finalize();return record
-                record.update(state='completed');write_json(manifest,record);self.finalize();return record
+                record.update(state='completed');write_json(manifest,record);self.finalize();phase(self.root,'completed');return record
             except BaseException as error:
-                record.update(state='interrupted' if isinstance(error,KeyboardInterrupt) else 'failed',error=str(error),traceback=traceback.format_exc());write_json(manifest,record)
+                record.update(state='interrupted' if isinstance(error,KeyboardInterrupt) else 'failed',error=str(error),traceback=traceback.format_exc());write_json(manifest,record);phase(self.root,record['state'],error=str(error))
                 try:self.sync('failed-safe-boundary')
-                except Exception as save_error:print('Persistent save also failed:',save_error,flush=True)
+                except Exception as save_error:
+                    record['persistent_save_error']=str(save_error);write_json(manifest,record);print('Persistent save also failed; original failure retained:',save_error,flush=True)
                 raise
     def finalize(self):
         if not (self.root/'session.json').exists():raise ValueError('No started run to finalize')

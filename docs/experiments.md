@@ -638,3 +638,18 @@ all5, including corrected equivalent scalar diffusion schedule. CUDA/T4 and live
 Colab/Drive not executed. Next experiment order M1→M2→M3→matched M4/M5, with
 held-out stage gates and full prerequisite/warm costs. Preserve untouched test.
 Details, raw records, commands and capacity counts: mesh-family.md.
+
+
+## Mesh stability and recovery checks —2 November2026
+
+outputs/mesh-stability-20261102 contains CPU FP16 finite-operand attention overflow
+before/after evidence, bounded real CPU/MPS training with live progress and local
+snapshots, failure/gradient/scaler counter fault injections, immutable-checkpoint
+hash checks, original-source one-batch replay and audited full-state continuation.
+Original-source1-update→corrected3-update CPU weights match uninterrupted original
+3-update weights bitwise. This tests recovery, not the unavailable2269-update run.
+The actual failed Colab run/config/checkpoints are not local; no healthy remote
+update is asserted and no actual failure trajectory was reproduced. CUDA/T4 and
+live Colab/Drive remain unverified. Use the exact collection and bounded T4
+acceptance in mesh-training-recovery.md before substantial continuation. No
+accuracy improvement or long-run stability result is claimed.

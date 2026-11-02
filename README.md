@@ -18,6 +18,18 @@ parameter counts, local/Colab suite commands, verified restore and comparisons.
 The [verification record](docs/verification.md) separates CPU/MPS/browser evidence
 from unexecuted scientific experiments.
 
+## Training stability and live Colab progress
+
+The stability release adds explicit FP32 boundaries for sensitive mesh attention/
+kernel products, checks losses before backward, preserves the last healthy checkpoint
+on failure, and captures targeted replay diagnostics. The primary Colab training
+cell now displays live progress/ETA for individual models and suites. The reported
+2269-update remote failure has **not** been reproduced locally; its artifacts are
+still needed to verify the first failing operation and healthy recovery point.
+Read [the recovery guide](docs/mesh-training-recovery.md) for the exact read-only
+collection cell, source-pinned corrected continuation and short T4 acceptance.
+Never update scientific source beneath active training or manually edit hashes.
+
 ## Install and start
 
 Use Python3.11–3.13 (tested3.12) and supported Node22.13+/24/26 (see .nvmrc):

@@ -40,6 +40,18 @@ Step4 preflights the requested workload; step6 is explicit and off by default.
 CPU/MPS pipeline and fresh-source local notebook execution do not verify CUDA,
 live Colab or mounted Drive. Tiny models are scientifically unevaluated.
 
+## Stability release
+
+The updated notebook calls shared live monitoring while training blocks, rather
+than printing only when run returns. scripts/collect_mesh_failure.py is a read-only
+single-run collector that can be executed from ZIP bytes without installing new
+scientific source under an old kernel. scripts/replay_mesh_checkpoint.py compares
+one batch under the original matching source without optimizer steps. The exact
+audited corrected-source transition is pinned in mesh/patches/stability_v1.json,
+included in package data; it preserves parent checkpoint/source bytes and all
+training state in a NEW M1 run. See docs/mesh-training-recovery.md before recovery.
+Do not infer a healthy remote checkpoint or CUDA stability from CPU/MPS tests.
+
 ## Retained legacy performance notes
 
 Performance update —31 October2026: docs/training-performance.md documents native

@@ -5,6 +5,7 @@ from torch import nn
 from .backbone import Coordinates,Conditioner,Processor
 from .geometry import Geometry,periodic_features
 from .state import pack,enforce,active_mask
+from .numerical import fp32_matmul
 
 
 class StateHead(nn.Module):
@@ -63,7 +64,7 @@ class Decoder(nn.Module):
         node=state[:,:self.c.nodes];static=state[:,-1,0][:,None,None].expand(-1,self.c.nodes,1);family=families[:,None,None].expand(-1,self.c.nodes,1).to(state.dtype);features=self.input(torch.cat([node,static,family],-1));pieces=[]
         for start in range(0,xy.shape[1],chunk or self.c.query_chunk):
             q=xy[:,start:start+(chunk or self.c.query_chunk)];unit=(q-q.new_tensor(self.c.domain['origins']))/q.new_tensor(self.c.domain['lengths']);angle=2*math.pi*(unit[:,:,None]-self.geometry.nodes[None,None]);distance=(1-angle.cos()).sum(-1)
-            weights=(-self.log_sharpness.exp()*distance.float()).softmax(-1);interpolated=weights@node.float();learned=self.residual(torch.cat([(weights@features.float()).to(q.dtype),self.coords(q)],-1)).float();values=interpolated+learned;values=torch.stack([values[...,0],values[...,1]*families[:,None].eq(1)],-1);pieces.append(values)
+            weights=(-self.log_sharpness.exp()*distance.float()).softmax(-1);interpolated=fp32_matmul(weights,node);learned=self.residual(torch.cat([fp32_matmul(weights,features).to(q.dtype),self.coords(q)],-1)).float();values=interpolated+learned;values=torch.stack([values[...,0],values[...,1]*families[:,None].eq(1)],-1);pieces.append(values)
         return torch.cat(pieces,1)
 
 

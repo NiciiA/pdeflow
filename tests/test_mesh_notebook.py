@@ -22,6 +22,6 @@ def test_mesh_notebook_cpu_fresh_source_all_cells(tmp_path,suite):
     script+=f'restored=Suite.from_store(DRIVE_RUNS_ROOT,session.root.name,{str(tmp_path/"restored")!r}) if SUITE else MeshSession.from_store(DRIVE_RUNS_ROOT,session.root.name,{str(tmp_path/"restored")!r},device="cpu")\n'
     script+='assert restored.run()["state"]=="completed"\nprint("FRESH SOURCE / VERIFIED RESTORE OK")\n'
     runner=tmp_path/'run_all.py';runner.write_text(script);result=subprocess.run([sys.executable,str(runner)],cwd=tmp_path,env={**os.environ,'MPLBACKEND':'Agg'},text=True,capture_output=True,timeout=180)
-    evidence=root/'outputs/mesh-family-20261102'/('notebook-suite' if suite else 'notebook-single');evidence.mkdir(exist_ok=True);(evidence/'execution.txt').write_text(result.stdout+'\nSTDERR\n'+result.stderr)
+    evidence=Path(os.environ.get('PDEFLOW_MESH_NOTEBOOK_EVIDENCE',str(tmp_path/'evidence')))/('notebook-suite' if suite else 'notebook-single');evidence.mkdir(parents=True,exist_ok=True);(evidence/'execution.txt').write_text(result.stdout+'\nSTDERR\n'+result.stderr)
     assert result.returncode==0,result.stdout[-2000:]+result.stderr[-4000:]
     assert 'CELL 8' in result.stdout and 'FRESH SOURCE / VERIFIED RESTORE OK' in result.stdout

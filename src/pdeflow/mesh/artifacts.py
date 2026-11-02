@@ -51,6 +51,10 @@ def build(root):
             if not target.is_relative_to(root.resolve()) or file_digest(target)!=cp['dependency']['sha256']:raise ValueError('Frozen stage outside complete run or changed')
         stages[path.parent.name]={'successful_updates':cp['successful_updates'],'attempted_updates':cp['attempted_updates'],'completed':cp['completed'],'sha256':file_digest(path)}
         files.update(p for p in path.parent.iterdir() if p.is_file() and p.suffix in ('.pt','.json','.npz','.jsonl'))
+    for p in (root/'stages').rglob('*'):
+        if p.is_file() and any(part in ('failure','healthy') for part in p.relative_to(root).parts) and p.suffix in ('.pt','.json'):files.add(p)
+    for p in (root/'continuation').glob('*'):
+        if p.is_file() and p.suffix in ('.pt','.json','.zip'):files.add(p)
     for p in (root/'bootstrap').glob('*'):
         if p.is_file() and p.suffix in ('.pt','.json'):files.add(p)
     inference={root/'export/model.pt',root/'export/model.json'} if (root/'export/model.pt').exists() else set()
