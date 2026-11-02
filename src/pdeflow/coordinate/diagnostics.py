@@ -75,7 +75,7 @@ def observation_ablations(bundle,case,problem,noise,solver,only=None):
     for label,observations in variants.items():
         if only is not None and label not in only:continue
         capture={}
-        def observe(module,args,out):capture['observation_embedding']=out.detach().cpu()
+        def observe(module,args,out):capture['observation_embedding']=(out[0] if isinstance(out,tuple) else out).detach().cpu()
         def velocity(module,args,out):
             if 'flow_velocity_at_s0' not in capture:capture['flow_velocity_at_s0']=out.detach().cpu()
         handles=[bundle.velocity.observation_encoder.register_forward_hook(observe),bundle.velocity.register_forward_hook(velocity)]

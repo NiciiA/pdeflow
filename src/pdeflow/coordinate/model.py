@@ -83,22 +83,26 @@ class ObservationEncoder(nn.Module):
         self.input=nn.Sequential(nn.Linear(self.coords.size+5,w),nn.SiLU(),nn.Linear(w,w));self.quantity=nn.Embedding(3,w)
         self.null=nn.Parameter(torch.zeros(1,1,w));self.queries=nn.Parameter(torch.randn(options(c)['observation_tokens'],w)*.02)
         self.aggregate=Attention(w,c.heads);self.layers=nn.ModuleList([Block(w,c.heads) for _ in range(options(c)['observation_depth'])])
-    def forward(self,observations,quantity_ids=None,time_present=None):
+    def tokenize(self,observations,quantity_ids=None,time_present=None):
         q,f,valid=observations[:3]
         if quantity_ids is None and len(observations)>3:quantity_ids=observations[3]
-        # Masked padding must be inert even with explicit quantity IDs or NaNs.
         q=torch.where(valid[...,None],q,torch.zeros_like(q));f=torch.where(valid[...,None],f,torch.zeros_like(f))
         sigma=f[...,1:2].clamp_min(0);features=torch.cat([f,torch.log1p(sigma),sigma.eq(0).to(f.dtype)],-1)
         quantity_ids=torch.zeros_like(valid,dtype=torch.long) if quantity_ids is None else quantity_ids
+        quantity_ids=torch.where(valid,quantity_ids,torch.zeros_like(quantity_ids))
         if time_present is not None:
             if time_present.shape!=valid.shape:raise ValueError('Time presence mask must match observations')
             q=torch.cat([q[...,:-1],torch.where(time_present,q[...,-1],torch.zeros_like(q[...,-1]))[...,None]],-1)
             features=features.clone();features[...,2]=time_present.to(features.dtype)
-        points=self.input(torch.cat([self.coords(q),features],-1))+self.quantity(torch.where(valid,quantity_ids,torch.zeros_like(quantity_ids)))
+        points=self.input(torch.cat([self.coords(q),features],-1))+self.quantity(quantity_ids)
         points=torch.cat([self.null.expand(len(q),-1,-1),points],1);valid=torch.cat([torch.ones(len(q),1,dtype=torch.bool,device=q.device),valid],1)
-        x=self.queries[None].expand(len(q),-1,-1);x=x+self.aggregate(x,points,valid)
+        coordinates=torch.cat([q.new_zeros(len(q),1,3),q],1);quantities=torch.cat([quantity_ids.new_full((len(q),1),2),quantity_ids],1)
+        return points,valid,coordinates,quantities
+    def forward(self,observations,quantity_ids=None,time_present=None,return_sensors=False):
+        sensors=self.tokenize(observations,quantity_ids,time_present);points,valid=sensors[:2]
+        x=self.queries[None].expand(len(points),-1,-1);x=x+self.aggregate(x,points,valid)
         for layer in self.layers:x=layer(x)
-        return x
+        return (x,sensors) if return_sensors else x
 
 
 class StateEncoder(nn.Module):
@@ -223,20 +227,30 @@ class Velocity(nn.Module):
     def __init__(self,c):
         super().__init__();self.c=c;w=c.width;self.geometry=Geometry(c);self.observation_encoder=ObservationEncoder(c);self.context_encoder=TypedContext(c);self.graph=nn.Linear(w,w)
         self.time=nn.Sequential(nn.Linear(3,w),nn.SiLU(),nn.Linear(w,w));self.inputs=nn.ModuleList([nn.Linear(w,w) for _ in range(3)]);self.outputs=nn.ModuleList([nn.Linear(w,w) for _ in range(3)]);self.processor=nn.ModuleList([Block(w,c.heads,True) for _ in range(c.layers)])
+        from .spatial_conditioning import settings,SensorAttention
+        self.sensor_cfg=settings(c.joint.get('conditioning'))
+        self.sensor_attention=SensorAttention(c) if self.sensor_cfg['version']=='spatial_v1' else None
     def condition(self,parameter,observations,known=None,families=None,graph=None):
         if families is None:families=torch.zeros(len(parameter),dtype=torch.long,device=parameter.device)
         if known is None:known=torch.ones_like(families,dtype=torch.bool)
         if graph is None:raise ValueError('Flow requires the validated PDE graph encoding')
-        context=torch.cat([self.observation_encoder(observations),self.context_encoder(parameter,known,families),self.graph(graph)[:,None]],1)
-        return context,active_mask(self.c,known,families)
+        if self.sensor_attention is None:
+            context=torch.cat([self.observation_encoder(observations),self.context_encoder(parameter,known,families),self.graph(graph)[:,None]],1)
+            return context,active_mask(self.c,known,families)
+        pooled,sensors=self.observation_encoder(observations,return_sensors=True)
+        context=torch.cat([pooled,self.context_encoder(parameter,known,families),self.graph(graph)[:,None]],1)
+        return context,active_mask(self.c,known,families),self.sensor_attention.prepare(*sensors)
+
     def forward(self,latent,flow_time,parameter=None,observations=None,known=None,families=None,graph=None,conditioning=None):
-        context,mask=conditioning if conditioning is not None else self.condition(parameter,observations,known,families,graph)
+        condition=conditioning if conditioning is not None else self.condition(parameter,observations,known,families,graph)
+        context,mask=condition[:2]
         s=flow_time.reshape(-1);time=self.time(torch.stack([s,s.sin(),s.cos()],-1));h=torch.cat([m(latent[:,g.start:g.stop]) for g,m in zip(layout(self.c),self.inputs)],1)*mask[...,None]+self.geometry.embedding()[None]
-        for layer in self.processor:
+        for index,layer in enumerate(self.processor):
             if self.training and self.c.training_options.get('activation_checkpointing',False):
                 from torch.utils.checkpoint import checkpoint
                 h=checkpoint(layer,h,context,time,mask,use_reentrant=False)
             else:h=layer(h,context,time,mask)
+            if self.sensor_attention is not None and index%self.sensor_cfg['every']==0:h=(h+self.sensor_attention(h,condition[2]))*mask[...,None]
         return torch.cat([m(h[:,g.start:g.stop]) for g,m in zip(layout(self.c),self.outputs)],1)*mask[...,None]
 
 def decode_chunks(ae,latent,queries,parameter=None,chunk_size=1024,known=None,quantity='u',families=None):

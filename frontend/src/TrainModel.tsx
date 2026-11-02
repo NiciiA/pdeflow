@@ -1,3 +1,4 @@
+import { MeshTraining } from "./MeshTraining";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./types";
 import type { Problem, Slice } from "./types";
@@ -200,7 +201,7 @@ function parameterRanges(
     .join(" · ");
 }
 
-export function TrainModel({
+export function LegacyTrainModel({
   problem,
   onUse,
   onRefresh,
@@ -539,6 +540,21 @@ export function TrainModel({
                   <option value="heat-wave-2d">Heat + Wave</option>
                 </select>
               </label>
+              <label>
+                Conditional experiment (B)
+                <select aria-label="Conditional experiment (B)"
+                  value={`${(advanced.joint as Record<string, {version?: string; beta?: number}> | undefined)?.conditioning?.version === "spatial_v1" ? "spatial" : "pooled"}-${((advanced.joint as Record<string, {version?: string; beta?: number}> | undefined)?.observation_auxiliary?.beta ?? 0) > 0 ? "aligned" : "fm"}`}
+                  onChange={(e) => setAdvanced((a) => ({...a, joint: {...(a.joint as Record<string, unknown> ?? {}),
+                    conditioning: {version: e.target.value.startsWith("spatial") ? "spatial_v1" : "pooled_v1"},
+                    observation_auxiliary: e.target.value.endsWith("aligned") ? {beta: .01, minimum_s: .5, maximum_s: 1, sensor_budget: 8, query_chunk: 8, discrepancy_relative: .05, warmup_updates: 100} : {},
+                  }}))}>
+                  <option value="pooled-fm">B0 · Baseline</option>
+                  <option value="spatial-fm">B1 · Spatial conditioning</option>
+                  <option value="pooled-aligned">B2 · Observation-aligned</option>
+                  <option value="spatial-aligned">B3 · Spatial + observation-aligned</option>
+                </select>
+                <small>New experiment only. Optional losses are experimental. A1/A2 stay separate; advanced settings are below.</small>
+              </label>
               {!focused && (
                 <>
                   <label>
@@ -564,6 +580,7 @@ export function TrainModel({
                             heads: p[2],
                             tokens: p[3],
                             joint: {
+                              ...(a.joint as Record<string, unknown> ?? {}),
                               encoder_depth: p[4],
                               decoder_depth: p[5],
                               observation_tokens: p[6],
@@ -1574,4 +1591,9 @@ export function TrainModel({
       </Card>
     </section>
   );
+}
+
+export function TrainModel(props: {problem?: Problem;onUse?: (selection:TrainingSelection)=>void;onRefresh:()=>void;focused?:boolean}) {
+ const [legacy,setLegacy]=useState(false);
+ return legacy ? <><button onClick={()=>setLegacy(false)}>Back to new mesh models</button><p>Legacy baseline · original A1/A2/B training and checkpoint contracts.</p><LegacyTrainModel {...props}/></> : <MeshTraining {...props} onLegacy={()=>setLegacy(true)}/>;
 }

@@ -85,16 +85,17 @@ def forward(c,ae,rows,stage,norms,device,timings,frozen,differentiable_loss,item
                 item_quantity(rows[i].item,name)
                 loss=differentiable_loss(pred[k:k+1],targets[k:k+1],weights[k:k+1],loss_settings(c.field_loss).type,validate=False)
                 field_losses[i].append(loss);record(components,rows[i].item['family']+'_'+name,loss)
-    field=torch.stack([torch.stack(x).mean() for x in field_losses])
+    from .quantity_weights import combine,settings as quantity_settings
+    field=torch.stack([combine(c,x) if stage=='autoencoder' else torch.stack(x).mean() for x in field_losses])
     from .evolution_objective import structured_field_loss,physics_loss
     with timings.measure('spectral_field_compute'):
-        extra,info=structured_field_loss(c,ae,field_state,rows,f,norms,device)
+        extra,info=structured_field_loss(c,ae,field_state,rows,f,norms,device,stage=='autoencoder')
     domain_field=field;spectral_term=extra
     if stage=='evolution':record(components,'objective_domain_field',field);record(components,'objective_spectral',extra)
     field=field+extra;components.update(info)
     if stage=='autoencoder':
         scalar=(ae.decode_parameter(z,families=f)-p).float().square();components['scalar']=scalar[-1].detach()
-        return field+.1*scalar+joint_options(c)['latent_regularization']*z.float().square().mean((1,2))
+        return field+quantity_settings(c.representation_weights)['parameter']*scalar+joint_options(c)['latent_regularization']*z.float().square().mean((1,2))
     mask=active_mask(c,known,f)[...,None]
     def latent_error(a,b):return ((a.float()-b.float()).square()*mask).sum((1,2))/mask.expand_as(a).sum((1,2))
     alignment=latent_error(evolved,zt)
@@ -119,8 +120,19 @@ def forward(c,ae,rows,stage,norms,device,timings,frozen,differentiable_loss,item
         for i,r in enumerate(rows):
             extra,info=physics_loss(c,ae,z0[i:i+1],p[i:i+1],known[i:i+1],f[i:i+1],norms,r.seed)
             extras.append(extra[0]);components.update(info)
+    kinematics=[]
+    from .evolution_objective import kinematic_loss
+    with timings.measure('kinematic_compute'):
+        for i,r in enumerate(rows):
+            value,info=kinematic_loss(c,ae,z0[i:i+1],p[i:i+1],known[i:i+1],f[i:i+1],norms,r.seed+911)
+            kinematics.append(value[0])
+            for key,value in info.items():
+                if key in ('kinematic_examples','kinematic_queries'):components[key]=components.get(key,0)+value
+                elif key=='kinematic_raw':record(components,key,value.reshape(1))
+                else:components[key]=value
+    kinematic_term=torch.stack(kinematics);record(components,'objective_kinematic',kinematic_term)
     alignment_term=c.evolution.get('latent_weight',.1)*alignment;composition_term=c.evolution.get('composition_weight',.01)*(composition+physical);physics_term=torch.stack(extras)
     record(components,'objective_alignment',alignment_term);record(components,'objective_composition',composition_term);record(components,'objective_physics',physics_term)
-    loss=field+alignment_term+composition_term+physics_term
-    if return_parts:return loss,{'domain':domain_field,'spectral':spectral_term,'alignment':alignment_term,'composition':composition_term,'physics':physics_term}
+    loss=field+alignment_term+composition_term+physics_term+kinematic_term
+    if return_parts:return loss,{'domain':domain_field,'spectral':spectral_term,'alignment':alignment_term,'composition':composition_term,'physics':physics_term,'kinematic':kinematic_term}
     return loss

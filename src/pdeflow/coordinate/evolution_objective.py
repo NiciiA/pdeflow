@@ -33,7 +33,7 @@ def decoded_residuals(ae,z,coords,p,known,f,norms):
         q=coords.detach().float().clone().requires_grad_(True);z=z.float();p=p.float()
         ns=[norms[('heat','wave')[int(i)]] for i in f.detach().cpu()]
         us=q.new_tensor([n[0]['scale'] for n in ns])[:,None];um=q.new_tensor([n[0]['mean'] for n in ns])[:,None]
-        vs=q.new_tensor([n[1]['scale'] if len(n)>1 else n[0]['scale']/ae.c.interval[1] for n in ns])[:,None];vm=q.new_tensor([n[1]['mean'] if len(n)>1 else 0. for n in ns])[:,None]
+        vs=q.new_tensor([n[1]['scale'] if len(n)>1 else n[0]['scale']/(ae.c.interval[1]-ae.c.interval[0]) for n in ns])[:,None];vm=q.new_tensor([n[1]['mean'] if len(n)>1 else 0. for n in ns])[:,None]
         k=torch.zeros(q.shape[:2],dtype=torch.long,device=q.device)
         u=decode_points(ae,z,q,k,p,known,f,chunk=8)*us+um
         grad=torch.autograd.grad(u.sum(),q,create_graph=True)[0]
@@ -80,7 +80,7 @@ def phase_spectral_mse(prediction,reference,frequency_power=0.):
     return ((real.square()+imag.square())*weight).sum((-2,-1))
 
 
-def structured_field_loss(c,ae,states,rows,f,norms,device):
+def structured_field_loss(c,ae,states,rows,f,norms,device,a1=False):
     from pdeflow.field_losses import settings
     cfg=settings(c.field_loss)
     if cfg.type!='spectral_mse':return states.float().sum((1,2))*0,{}
@@ -99,5 +99,42 @@ def structured_field_loss(c,ae,states,rows,f,norms,device):
         pred=ae.decode_state(states[ix],xy,j,f[ix]).reshape(-1,n,n)
         values=phase_spectral_mse(pred,target,cfg.spectral_frequency_power)
         for k,i in enumerate(active):losses[i].append(values[k])
-    result=torch.stack([torch.stack(x).mean() for x in losses])
+    from .quantity_weights import combine
+    result=torch.stack([combine(c,x) if a1 else torch.stack(x).mean() for x in losses])
     return cfg.spectral_weight*result,{'spectral_field':result.detach().mean(),'spectral_additional_queries_per_quantity':n*n}
+
+
+@dataclass(frozen=True)
+class KinematicObjective:
+    weight: float = 0.
+    query_points: int = 4
+
+
+def kinematic_settings(raw=None):
+    if raw is not None and (not isinstance(raw,dict) or set(raw)-KinematicObjective.__dataclass_fields__.keys()):raise ValueError('Unknown wave kinematic setting')
+    cfg=KinematicObjective(**(raw or {}))
+    if not math.isfinite(cfg.weight) or cfg.weight<0 or type(cfg.query_points)!=int or not 1<=cfg.query_points<=128:raise ValueError('Invalid wave kinematic weight/query budget')
+    return cfg
+
+
+def decoded_kinematic(ae,z,coords,p,known,f,norms):
+    """Physical (u_t-v)/(training u scale / interval), differentiating actual T/D."""
+    with torch.enable_grad(),torch.autocast(z.device.type,enabled=False),derivative_attention():
+        q=coords.detach().float().clone().requires_grad_(True)
+        k=torch.zeros(q.shape[:2],dtype=torch.long,device=q.device)
+        u=decode_points(ae,z.float(),q,k,p.float(),known,f)*norms['wave'][0]['scale']+norms['wave'][0]['mean']
+        v=decode_points(ae,z.float(),q,torch.ones_like(k),p.float(),known,f)*norms['wave'][1]['scale']+norms['wave'][1]['mean']
+        dt=torch.autograd.grad(u.sum(),q,create_graph=True)[0][...,-1]
+        return (dt-v)/(norms['wave'][0]['scale']/(ae.c.interval[1]-ae.c.interval[0]))
+
+
+def kinematic_loss(c,ae,z0,p,known,f,norms,seed):
+    cfg=kinematic_settings(c.evolution.get('kinematic'));zero=z0.float().sum((1,2))*0
+    if cfg.weight==0:return zero,{}
+    indices=torch.where(f.eq(1))[0]
+    if not len(indices):return zero,{'kinematic_examples':0}
+    g=torch.Generator().manual_seed(int(seed));q=torch.rand(len(indices),cfg.query_points,3,generator=g)
+    q[...,:2]=q[...,:2]*q.new_tensor(c.lengths)+q.new_tensor(c.origins);q[...,-1]=c.interval[0]+q[...,-1]*(c.interval[1]-c.interval[0])
+    residual=decoded_kinematic(ae,z0[indices],q.to(z0.device),p[indices],known[indices],f[indices],norms);raw=residual.square().mean(1)
+    values=zero.index_copy(0,indices,cfg.weight*raw)
+    return values,{'kinematic_raw':raw.detach().mean(),'kinematic_weight':cfg.weight,'kinematic_examples':len(indices),'kinematic_queries':len(indices)*cfg.query_points}

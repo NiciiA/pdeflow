@@ -91,7 +91,9 @@ def endpoint_loss(ae,c,state,velocity,s,mean,scale,parameter,known,families,obse
         if cfg.selection=='uniform' and len(ix)>cfg.sensor_budget:ix=ix[torch.randperm(len(ix),generator=g)[:cfg.sensor_budget]]
         selected.append(ix)
     counts=[len(x) for x in selected];n=max(counts,default=0)
-    if n==0:return zero,{'observation_auxiliary_beta':cfg.beta,'observation_selected':0}
+    beta=cfg.beta*(min(1.,(successful_update+1)/cfg.warmup_updates) if cfg.warmup_updates else 1.)
+    coverage={'observation_eligible_examples':int((eligible_cpu&masks.any(1)).sum()),'observation_flow_s_min':s.detach().min(),'observation_flow_s_max':s.detach().max(),'observation_effective_beta_case_mean':beta*(eligible&masks.any(1).to(eligible.device)).float().mean()}
+    if n==0:return zero,{'observation_auxiliary_beta':beta,'observation_selected':0,**coverage}
     ix=torch.zeros(b,n,dtype=torch.long,device=state.device);mask=torch.zeros(b,n,dtype=torch.bool,device=state.device)
     for i,row in enumerate(selected):
         if len(row):ix[i,:len(row)]=row.to(state.device);mask[i,:len(row)]=True
@@ -122,5 +124,5 @@ def endpoint_loss(ae,c,state,velocity,s,mean,scale,parameter,known,families,obse
     per=penalty.sum(1)/mask.sum(1).clamp_min(1)
     if cfg.reduction=='sum':per=per*per.new_tensor(population)
     beta=cfg.beta*(min(1.,(successful_update+1)/cfg.warmup_updates) if cfg.warmup_updates else 1.)
-    info={'observation_auxiliary_beta':beta,'observation_endpoint_loss':per.detach().mean(),'observation_selected':sum(counts),'observation_population':sum(population),'observation_gaussian_values':(mask&positive).sum().detach(),'observation_tolerance_values':(mask&~positive).sum().detach()}
+    info={**coverage,'observation_auxiliary_beta':beta,'observation_endpoint_loss':per.detach().mean(),'observation_selected':sum(counts),'observation_population':sum(population),'observation_gaussian_values':(mask&positive).sum().detach(),'observation_tolerance_values':(mask&~positive).sum().detach()}
     return beta*per,info

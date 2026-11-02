@@ -171,6 +171,8 @@ def create_app(model_roots=None, output_root=None, data_root=None, worker=None, 
     app = FastAPI(title="PDEFlow local workbench", lifespan=lifespan)
     from .coordinate import register as register_coordinate
     register_coordinate(app,local_workspace,data,output)
+    from .mesh import register as register_mesh
+    register_mesh(app,local_workspace,data,output)
     from .training import register as register_training
     register_training(app,local_workspace)
     from .playground import register as register_playground

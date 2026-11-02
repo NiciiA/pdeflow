@@ -88,7 +88,8 @@ const wavePresets = [
   ["travelling", "Travelling wave"],
   ["pulse", "Displacement pulse"],
   ["velocity_pulse", "Velocity-only pulse"],
-  ["signed_pulses", "Signed pulses"],
+  ["interference", "Two-pulse interference"],
+  ["multimode", "Multimode waves"],
   ["random", "Random u and v"],
   ["draw", "Draw your own"],
 ];
@@ -373,7 +374,9 @@ export default function HeatPlayground() {
             controller.signal,
           );
       const modelPromise =
-        result && job?.status === "succeeded"
+        result &&
+        job?.status === "succeeded" &&
+        !(result.metrics.initial_only && physicalTime !== 0)
           ? call<{ frame: number[][] }>(
               `/playground/results/${job.id}/at?time=${physicalTime}&quantity=${quantity}`,
               undefined,
@@ -630,7 +633,7 @@ export default function HeatPlayground() {
       : rawComparisonRange;
   const modelFrame = useMemo(
     () =>
-      result
+      result && !(result.metrics.initial_only && physicalTime !== 0)
         ? evaluated?.quantity === quantity &&
           evaluated?.job === job?.id &&
           evaluated?.time === physicalTime &&
@@ -897,18 +900,23 @@ export default function HeatPlayground() {
     const current = inverseEpoch.current;
     resultEpoch.current = current;
     try {
-      const j = await call<Job>("/coordinate/reconstruct", {
-        model_id: model,
-        require_continuous: true,
-        problem,
-        rows,
-        steps,
-        particles,
-        device,
-        seed: 91,
-        chunk_size: 1024,
-        submission_token: crypto.randomUUID(),
-      });
+      const j = await call<Job>(
+        selected?.architecture?.startsWith("mesh_")
+          ? "/mesh/reconstruct"
+          : "/coordinate/reconstruct",
+        {
+          model_id: model,
+          require_continuous: true,
+          problem,
+          rows,
+          steps,
+          particles,
+          device,
+          seed: 91,
+          chunk_size: 1024,
+          submission_token: crypto.randomUUID(),
+        },
+      );
       setJob(j);
     } catch (e) {
       setError((e as Error).message);
@@ -1132,6 +1140,16 @@ export default function HeatPlayground() {
                       edit({
                         family,
                         preset: family === "wave" ? "standing" : "cosine",
+                        ...(family === "wave"
+                          ? {
+                              background: 0,
+                              c: 0.6,
+                              kx: 1,
+                              ky: 0,
+                              end: 1,
+                              wave_phase: 0,
+                            }
+                          : {}),
                         initial: null,
                         velocity_initial: null,
                         velocity_preset: "zero",
@@ -1148,9 +1166,12 @@ export default function HeatPlayground() {
                       Initial velocity
                       <select
                         aria-label="Initial velocity"
-                        disabled={["travelling", "velocity_pulse"].includes(
-                          cfg.preset,
-                        )}
+                        disabled={[
+                          "standing",
+                          "travelling",
+                          "velocity_pulse",
+                          "multimode",
+                        ].includes(cfg.preset)}
                         value={cfg.velocity_preset}
                         onChange={(e) =>
                           edit({
@@ -1159,7 +1180,7 @@ export default function HeatPlayground() {
                           })
                         }
                       >
-                        <option value="zero">Explicit zero v₀</option>
+                        <option value="zero">Preset-consistent v₀</option>
                         <option value="random">Independent random v₀</option>
                         <option value="pulse">Velocity pulse</option>
                       </select>
@@ -1205,7 +1226,166 @@ export default function HeatPlayground() {
                     ),
                   )}
                 </div>
-                {["cosine", "standing", "travelling"].includes(cfg.preset) && (
+                {cfg.family === "wave" && (
+                  <>
+                    <p className="wave-description">
+                      {reference?.wave_preset?.description ||
+                        "Wave references use complete displacement and velocity; no trained model is required."}
+                    </p>
+                    <div className="number-grid">
+                      {cfg.preset === "standing" && (
+                        <Numeric
+                          label="Standing temporal phase"
+                          value={cfg.wave_phase}
+                          onChange={(v) => edit({ wave_phase: v })}
+                          min={-6.28}
+                          max={6.28}
+                        />
+                      )}
+                      {cfg.preset === "travelling" && (
+                        <label>
+                          Travel direction
+                          <select
+                            aria-label="Travel direction"
+                            value={cfg.direction}
+                            onChange={(e) =>
+                              edit({ direction: Number(e.target.value) })
+                            }
+                          >
+                            <option value="1">Along the mode vector</option>
+                            <option value="-1">Opposite the mode vector</option>
+                          </select>
+                        </label>
+                      )}
+                      {["pulse", "velocity_pulse", "interference"].includes(
+                        cfg.preset,
+                      ) && (
+                        <>
+                          <Numeric
+                            label="Pulse amplitude"
+                            value={cfg.amplitude}
+                            onChange={(v) => edit({ amplitude: v })}
+                            min={-10}
+                            max={10}
+                          />
+                          <Numeric
+                            label="Pulse width (domain fraction)"
+                            value={cfg.width1}
+                            onChange={(v) => edit({ width1: v })}
+                            min={0.03}
+                            max={0.4}
+                          />
+                          <Numeric
+                            label="Pulse center x"
+                            value={cfg.center1[0]}
+                            onChange={(v) =>
+                              edit({ center1: [v, cfg.center1[1]] })
+                            }
+                            min={0}
+                            max={0.99}
+                          />
+                          <Numeric
+                            label="Pulse center y"
+                            value={cfg.center1[1]}
+                            onChange={(v) =>
+                              edit({ center1: [cfg.center1[0], v] })
+                            }
+                            min={0}
+                            max={0.99}
+                          />
+                        </>
+                      )}
+                      {cfg.preset === "interference" && (
+                        <>
+                          <Numeric
+                            label="Second pulse amplitude"
+                            value={cfg.amplitude2}
+                            onChange={(v) => edit({ amplitude2: v })}
+                            min={-10}
+                            max={10}
+                          />
+                          <Numeric
+                            label="Second pulse width"
+                            value={cfg.width2}
+                            onChange={(v) => edit({ width2: v })}
+                            min={0.03}
+                            max={0.4}
+                          />
+                          <Numeric
+                            label="Second center x"
+                            value={cfg.center2[0]}
+                            onChange={(v) =>
+                              edit({ center2: [v, cfg.center2[1]] })
+                            }
+                            min={0}
+                            max={0.99}
+                          />
+                          <Numeric
+                            label="Second center y"
+                            value={cfg.center2[1]}
+                            onChange={(v) =>
+                              edit({ center2: [cfg.center2[0], v] })
+                            }
+                            min={0}
+                            max={0.99}
+                          />
+                        </>
+                      )}
+                      {cfg.preset === "multimode" && (
+                        <>
+                          <Numeric
+                            label="Wave seed"
+                            value={cfg.seed}
+                            onChange={(v) => edit({ seed: v })}
+                            min={0}
+                            max={4294967295}
+                            step={1}
+                          />
+                          <Numeric
+                            label="Wave complexity"
+                            value={cfg.complexity}
+                            onChange={(v) => edit({ complexity: v })}
+                            min={1}
+                            max={8}
+                            step={1}
+                          />
+                          <Numeric
+                            label="Multimode amplitude"
+                            value={cfg.amplitude}
+                            onChange={(v) => edit({ amplitude: v })}
+                            min={-10}
+                            max={10}
+                          />
+                        </>
+                      )}
+                    </div>
+                    {reference?.initial_velocity && (
+                      <details className="wave-initial-previews">
+                        <summary>Complete initial state · u₀ and v₀</summary>
+                        <div className="wave-preview-grid">
+                          <HeatCanvas
+                            values={reference.initial}
+                            range={reference.range}
+                            label="Initial displacement u0"
+                          />
+                          <HeatCanvas
+                            values={reference.initial_velocity}
+                            range={reference.velocity_range || [-1, 1]}
+                            label="Initial velocity v0"
+                            fieldSymbol="v"
+                          />
+                        </div>
+                        <p>
+                          Signed field units for u; field units per physical
+                          time for v. Scales stay fixed during playback.
+                        </p>
+                      </details>
+                    )}
+                  </>
+                )}
+                {["cosine", "standing", "travelling", "multimode"].includes(
+                  cfg.preset,
+                ) && (
                   <div className="number-grid">
                     {
                       <Numeric
@@ -2083,7 +2263,9 @@ export default function HeatPlayground() {
                 <span>↔ Periodic field · opposite edges connect</span>
                 <span>
                   {result
-                    ? "One fixed generated latent across physical time"
+                    ? result?.metrics.architecture?.startsWith("mesh_")
+                      ? "One fixed inferred physical initial state across physical time"
+                      : "One fixed generated latent across physical time"
                     : "Reference simulation needs no trained model"}
                 </span>
               </div>
@@ -2117,6 +2299,40 @@ export default function HeatPlayground() {
                       . Tiny checkpoints do not establish parameter
                       identification.
                     </p>
+                  )}
+                  {selected?.initial_only && (
+                    <p>
+                      M1 predicts only the initial state. Measurements may have
+                      later known timestamps; reference animation remains
+                      separate. Move physical time to 0 to inspect its
+                      prediction.
+                    </p>
+                  )}
+                  {result?.metrics.prediction_kind && (
+                    <p>
+                      Output: {result.metrics.prediction_kind}. Spread is
+                      empirical, not calibrated uncertainty.
+                    </p>
+                  )}
+                  {result?.metrics.training_configuration && (
+                    <details>
+                      <summary>Model training provenance</summary>
+                      <p>
+                        Inferred initial state ·{" "}
+                        {result.metrics.correction
+                          ? "observation-corrected"
+                          : "uncorrected"}
+                        . Reference-encoded oracle diagnostics are a separate
+                        comparison.
+                      </p>
+                      <pre className="physical-diagnostics">
+                        {JSON.stringify(
+                          result.metrics.training_configuration,
+                          null,
+                          2,
+                        )}
+                      </pre>
+                    </details>
                   )}
                   {result?.metrics.physics && (
                     <details>

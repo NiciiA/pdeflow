@@ -25,7 +25,8 @@ from pdeflow import local
 from pdeflow.runtime import Config, RuntimeSpec, code_identity, digest, file_digest, read_json, write_json
 
 PROBLEMS = ('wave-2d','heat-wave-2d','heat-1d', 'heat-2d', 'heat-3d', 'darcy-2d', 'darcy-3d', 'chemistry-2d', 'chemistry-3d')
-MODELS = {'resolution-flexible': 'Operator-Aware Generative Latent Neural Operator'}
+from pdeflow.mesh.contracts import CANDIDATES as MESH_CANDIDATES
+MODELS = {**{k:v['name'] for k,v in MESH_CANDIDATES.items()},'resolution-flexible': 'Legacy · Factorized AE / flow / evolution'}
 BUDGETS = {
     'pipeline-check': 'Verifies execution; unsuitable for judging accuracy.',
     'development': 'Bounded experiment for assessing learning; adequacy unestablished.',
@@ -37,6 +38,11 @@ STAGE_LABELS = {
     'representation_validation': ('Check field representation', 'Held-out validation distortion compared with a training-fitted constant predictor.'),
     'evolution': ('Learn physical-time evolution','Frozen state encoder/decoder; shared graph and transition backbone learn complete physical-state dynamics.'),
     'flow': ('Learn conditional generation', 'Learn latent velocity conditioned on noisy observations; field representation stays frozen.'),
+    'reconstruction':('Learn observation-to-field reconstruction','Decoded initial/trajectory losses; no oracle latent encoder targets.'),
+    'central':('Learn deterministic zero-noise branch','This branch is not asserted equal to the stochastic ensemble mean.'),
+    'stochastic':('Learn FGN-style stochastic fields','Fair CRPS plus explicitly weighted central branch.'),
+    'dynamics':('Learn physical-state evolution','Clean TRAIN initial node values are supervised dynamics inputs, not hidden inverse conditioning.'),
+    'diffusion':('Learn conditional VP diffusion','VP-v denoising on physical nodal initial states and unknown log scalar.'),
     'fixed': ('Learn fixed-grid generation', 'Learn field-space flow velocity; observations guide reconstruction afterward.'),
     'model_validation': ('Inspect validation reconstructions', 'Fixed held-out validation cases and sensor seeds; never the test split.'),
     'register': ('Make model available', 'Discoverable inference export; use requires your explicit selection.'),
@@ -56,7 +62,7 @@ def known_workspaces(workspace=None):
     if root.is_relative_to(outputs):
         for directory, dirs, _ in os.walk(outputs, followlinks=False):
             p = Path(directory)
-            if 'runs' in dirs or 'coordinate' in dirs or 'training-workflows' in dirs:
+            if 'runs' in dirs or 'coordinate' in dirs or 'training-workflows' in dirs or 'mesh-models' in dirs:
                 result.add(p.resolve())
             dirs[:] = [d for d in dirs if d not in {
                 'runs', 'coordinate', 'training-workflows', 'data', 'cache', 'workbench',
@@ -92,9 +98,13 @@ def plan(request):
     allowed = {'problem', 'model', 'budget', 'device', 'advanced', 'allow_poor_representation', 'representation_max_mse_ratio'}
     if set(request) - allowed:
         raise ValueError('Unknown training settings: ' + ', '.join(sorted(set(request) - allowed)))
-    request = {'problem': 'heat-wave-2d', 'model': 'resolution-flexible', 'budget': 'pipeline-check', 'device': 'auto',
+    request = {'problem': 'heat-wave-2d', 'model': 'mesh_m1_v1', 'budget': 'pipeline-check', 'device': 'auto',
                'advanced': {}, 'allow_poor_representation': False, 'representation_max_mse_ratio': 1., **request}
     problem, model, budget = (request[k] for k in ('problem', 'model', 'budget'))
+    if model in MESH_CANDIDATES:
+        if request.get('allow_poor_representation'):raise ValueError('New mesh stage gates cannot be bypassed')
+        from pdeflow.mesh.workflow import plan as mesh_plan
+        return mesh_plan(request)
     if problem not in PROBLEMS or model not in MODELS or budget not in BUDGETS:
         raise ValueError('Choose a supported problem, model and budget preset')
     if model == 'resolution-flexible' and problem not in ('heat-2d','wave-2d','heat-wave-2d'):
@@ -184,6 +194,11 @@ def start(request, workspace=None, token=None, background=True):
     for file in (local.workspace_root(workspace)/'batch-experiments').glob('*/experiment.json'):
         if batch_status(file.parent)['state'] in batch_active:raise ValueError('Finish/cancel the batch benchmark before training')
     resolved = plan(request)  # validate availability/physics before any run allocation
+    if resolved['model'] in MESH_CANDIDATES and max(resolved['updates'].values())>20:
+        from pdeflow.mesh.provenance import scientific_source
+        file=local.workspace_root(workspace)/'mesh-profiles'/(digest(resolved['config'])+'.json')
+        profile=read_json(file) if file.exists() else {}
+        if not profile.get('success') or profile.get('scientific_source')!=scientific_source()['sha256']:raise ValueError('Click Preflight selected model for these exact settings before starting substantial training')
     root = _root(workspace); root.mkdir(parents=True, exist_ok=True)
     token = token or uuid.uuid4().hex
     if not isinstance(token, str) or not 1 <= len(token) <= 100:
@@ -214,6 +229,11 @@ def start(request, workspace=None, token=None, background=True):
 
 def _child_progress(path, record):
     p = record['plan']
+    if p['model'] in MESH_CANDIDATES:
+        stage=record['stage']
+        if stage not in p['updates']:stage=next((s for s in reversed(list(p['updates'])) if (path/'stages'/s/'run.json').exists()),stage)
+        directory=path/'stages'/stage;file=directory/'run.json'
+        return (read_json(file),read_json(directory/'history.json')[-200:]) if file.exists() and (directory/'history.json').exists() else ({},[])
     directory = path / ('evolution' if record['stage']=='evolution' else 'coordinate-ae' if record['stage'] in ('prepare', 'representation', 'representation_validation') else 'coordinate-flow')
     if p['model'] == 'fixed-grid':
         directory = path / 'fixed'
@@ -247,8 +267,9 @@ def status(selector='latest', workspace=None):
         state = 'interrupted'
     child, history = _child_progress(path, record)
     stage = 'prepare' if child.get('state') == 'preparing' and active else record['stage']
-    progress = child.get('progress', 0) if record['stage'] in ('prepare','representation','evolution','flow','fixed') else 0
-    total = record['plan']['updates'].get(record['stage'], 0)
+    learning_stage=child.get('stage',record['stage']) if record['plan']['model'] in MESH_CANDIDATES else record['stage']
+    progress = child.get('progress', 0) if learning_stage in (*record['plan']['updates'],'prepare') else 0
+    total = record['plan']['updates'].get(learning_stage, 0)
     elapsed = record.get('elapsed_seconds_total', 0.)
     if active:
         elapsed += time.time() - record.get('attempt_started_unix', time.time())
@@ -297,6 +318,15 @@ def stop(selector='latest', workspace=None):
 
 
 def resume(selector='latest', workspace=None, allow_poor_representation=False, background=True):
+    path=_resolve(selector,workspace);record=read_json(path/'workflow.json')
+    if record['plan']['model'] in MESH_CANDIDATES:
+        if local.is_locked(path):raise ValueError('Run is already active')
+        if allow_poor_representation:raise ValueError('Mesh prerequisites cannot be bypassed; inspect/extend or start a new experiment')
+        (path/'stop-request.json').unlink(missing_ok=True);_save(path,record,state='queued',attempts=record.get('attempts',1)+1,launched_unix=time.time())
+        if background:_save(path,record,pid=_spawn(path))
+        else:execute(path)
+        return status(selector,workspace)
+
     path = _resolve(selector, workspace)
     with local.run_lock(path.parent):
         current = status(path.name, workspace)
@@ -407,7 +437,17 @@ def execute(path):
         _save(path, record, pid=os.getpid(), state='running', started_unix=record.get('started_unix', attempt_started),
               attempt_started_unix=attempt_started, error=None)
         try:
-            if p['model'] == 'resolution-flexible':
+            if p['model'] in MESH_CANDIDATES:
+                if should_stop():raise InterruptedError('Safe stop requested before model training')
+                from pdeflow.mesh.workflow import execute as mesh_execute
+                def mesh_event(e):
+                    _save(path,record,stage=e['stage'],state='running',mesh_progress=e['record']['progress'])
+                outcome,artifact=mesh_execute(path,record,mesh_event)
+                if outcome['state']=='needs_review':
+                    _save(path,record,state='needs_review',warning='Prerequisite mesh validation failed; later stages were not started',validation=outcome.get('gate'));return
+                if outcome['state']!='completed':raise InterruptedError('Mesh training stopped at a recoverable boundary')
+                export=Path(artifact['export']);validation=read_json(path/'stages'/p['stages'][-3]/'validation.json')
+            elif p['model'] == 'resolution-flexible':
                 outcome=coordinate_stages(p['config'],path,mode='resume' if (path/'coordinate-ae/run.json').exists() else 'new',
                     gate_ratio=p['quality_policy']['max_mse_ratio'],override_gate=bool(p['pipeline_check'] or p['quality_policy']['override'] or record.get('quality_override')),
                     names=('coordinate-ae','coordinate-flow'),stage_hook=stage,finish_hook=finish,should_stop=should_stop,local_validation=True)
@@ -421,7 +461,10 @@ def execute(path):
             else:raise ValueError('Legacy generative workflow is retired; start a new joint model run')
             _save(path, record, validation=validation)
             finish('model_validation'); stage('register')
-            if p['model'] == 'resolution-flexible':
+            if p['model'] in MESH_CANDIDATES:
+                from pdeflow.mesh.registry import register_checkpoint
+                register_checkpoint(export,record['workspace'])
+            elif p['model'] == 'resolution-flexible':
                 from pdeflow.coordinate.registry import register_checkpoint
                 register_checkpoint(export, record['workspace'])
             # Registration never changes the user's selected reconstruction model.
@@ -484,6 +527,8 @@ def model_list(workspace=None, problem=None):
                    representation_quality=workflow.get('representation_quality') if workflow else None,
                    budget=workflow['plan']['budget'] if workflow else 'historical budget; inspect provenance',
                    quality='Execution only; unsuitable for judging accuracy' if (workflow and workflow['plan']['pipeline_check']) or max(row['updates'].values()) <= 20 else 'Scientifically unevaluated; inspect validation')
+    from pdeflow.mesh.workflow import list_models
+    for row in list_models(workspace,p):result[row['id']]=row
     return list(result.values())
 
 
@@ -515,9 +560,32 @@ def preview(selector='latest', workspace=None, case=0, field=0, time_index=0, ax
     path = _resolve(selector, workspace); record = read_json(path / 'workflow.json')
     if type(case) != int or not 0 <= case < 2:
         raise ValueError('Choose a recorded validation case 0 or 1')
+    if record['plan']['model'] in MESH_CANDIDATES:
+        from pdeflow.coordinate.physics import problem as dynamic_problem
+        from pdeflow.core import GridSpec,DomainSpec
+        from pdeflow.runtime import file_digest
+        stages=record['plan']['stages'];available=[path/'stages'/stage/'preview.json' for stage in stages if (path/'stages'/stage/'preview.json').exists()]
+        if not available:raise ValueError('A current-stage validation preview is not available yet')
+        file=available[-1];meta=read_json(file);array=file.with_suffix('.npz')
+        if file_digest(array)!=meta['array_sha256']:raise ValueError('Preview publication in progress; retry')
+        ids=list(dict.fromkeys(r['id'] for r in meta['rows']));chosen=ids[min(case,len(ids)-1)];indices=[i for i,r in enumerate(meta['rows']) if r['id']==chosen];ix=indices[min(field,len(indices)-1)];row=meta['rows'][ix]
+        with np.load(array,allow_pickle=False) as data:reference,prediction,error=data['frames'][ix]
+        cfg=record['plan']['config'];grid=GridSpec(tuple(prediction.shape),DomainSpec(tuple(cfg['domain']['lengths']),tuple(cfg['domain']['origins'])),(row['physical_time'],));problem=dynamic_problem(grid,row['family'],None)
+        payload=slice_payload(problem,prediction,row['quantity'],axis,index,0);payload.update(reference=reference.tolist(),error=error.tolist(),checkpoint_update=meta['checkpoint_update'],preview_label=row,vmin=float(min(reference.min(),prediction.min())),vmax=float(max(reference.max(),prediction.max())))
+        return payload
     if record['plan']['model'] == 'resolution-flexible':
         from pdeflow.coordinate.physics import problem as dynamic_problem
         from pdeflow.core import GridSpec,DomainSpec
+        live=path/'flow/flow-preview.json'
+        if live.exists() and record.get('state') not in ('completed',):
+            from pdeflow.runtime import file_digest
+            meta=read_json(live);array=live.with_suffix('.npz')
+            if file_digest(array)!=meta['array_sha256']:raise ValueError('Preview publication in progress; retry')
+            families=list(dict.fromkeys(r['id'] for r in meta['rows']));chosen=families[min(case,len(families)-1)];indices=[i for i,r in enumerate(meta['rows']) if r['id']==chosen];row=meta['rows'][indices[min(field,len(indices)-1)]]
+            with np.load(array,allow_pickle=False) as data:reference,prediction,error=data['frames'][indices[min(field,len(indices)-1)]]
+            cfg=record['plan']['config'];grid=GridSpec(tuple(prediction.shape),DomainSpec(tuple(cfg['lengths']),tuple(cfg['origins'])),(row['physical_time'],));problem=dynamic_problem(grid,row['family'],None)
+            payload=slice_payload(problem,prediction,row['quantity'],axis,index,0);payload.update(reference=reference.tolist(),error=error.tolist(),checkpoint_update=meta['checkpoint_update'],preview_label=row,vmin=float(min(reference.min(),prediction.min())),vmax=float(max(reference.max(),prediction.max())))
+            return payload
         report=read_json(path/'flow-validation.json');rows=report['records'];row=rows[min(case*2,len(rows)-1)];offset=0
         for r in rows[:min(case*2,len(rows)-1)]:offset+=2 if r['family']=='wave' else 1
         with np.load(path/'flow-validation.npz',allow_pickle=False) as data:

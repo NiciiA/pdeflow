@@ -1,37 +1,46 @@
-# PDEFlow operator-aware heat/wave source package
+# PDEFlow mesh-family source package
 
-Extract and work inside pdeflow/. Follow README.md and notebooks/colab.ipynb for
-the active operator-aware physical-state v2 architecture and A1 → A2 → B workflow.
-Historical trajectory-model instructions require their original source; their
-checkpoints are preserved and incompatible with this model.
+Extract and work inside pdeflow/. README.md and docs/mesh-family.md describe the
+active new M1–M5 family. notebooks/colab.ipynb is the thin single-candidate/suite
+workflow; notebooks/legacy-factorized-colab.ipynb preserves the preceding original
+A1/A2/B notebook. The unrelated older colab-legacy.ipynb remains preserved in the
+checkout and excluded under the original packaging policy.
 
-Includes package source, frontend source and npm lockfile, dependency/project
-metadata, model/data configurations, tests, local launch/verification scripts,
-the active Colab notebook, documentation and attribution. SOURCE_MANIFEST.json
-lists every included file's byte count and SHA256. The adjacent .sha256 file
-records the ZIP hash. The legacy notebook is deliberately excluded.
+Included: installable package source, frontend source and npm lockfile, project and
+dependency metadata, configurations, tests, local launch/benchmark scripts, active
+and retained factorized notebooks, documentation/attribution, .nvmrc and this file.
+SOURCE_MANIFEST.json records every included member's bytes/SHA256; the adjacent
+.sha256 records the ZIP. Verify CRC plus manifest, not just filename. No private
+repository/account/Drive path is required; notebook paths are configurable.
 
-Excludes outputs, .git, .venv, node_modules, caches/builds, datasets, checkpoints,
-secrets, unrelated personal files and user scientific reference PDFs. No accepted
-experiment output is moved into the archive or deleted. Historical artifact paths
-in documentation describe the originating checkout; they are not promised ZIP
-members. The supplied design PDFs remain with their owner and are not redistributed.
+Excluded: outputs, .git, .venv, node_modules, caches/builds, datasets/checkpoints,
+secrets, unrelated personal files and user reference PDFs. Existing checkpoints,
+scientific datasets/results and source archives stay in their original locations.
+No pretrained model is bundled or automatically substituted. The deterministic
+reference recipe generates TRAIN/validation/test data locally; no external dataset
+download is required. Train through documented CLI/UI/Colab, or import your own
+compatible standalone export. Source-only packages cannot resume a training run
+without its separately verified resumable artifact/snapshot.
 
-The shared trainer generates reference data deterministically on demand; no external
-dataset download is required. For a new run, use the managed training command or
-Colab workflow in README.md. Start with representation validation. A failed gate
-must be investigated; a two-update pipeline check is unsuitable for accuracy.
-The archive intentionally contains no pretrained weights. Generate pipeline-check
-weights with the documented smoke configuration, train a properly evaluated model,
-or obtain a compatible v2 coordinate.pt export from your own prior run. On the
-originating checkout, outputs/operator-wave-20261030/final-cpu/flow/coordinate.pt is
-a preserved two-update-per-stage smoke export, not an accurate pretrained model.
+New models have explicit mesh architecture/schema/physical-state contracts; no A1
+encoder exists. Inference exports include every actual conditioner, generator,
+evolution and decoder used, transforms/capabilities/provenance, without needing data.
+M1 is initial-only. Diagnostic/resumable bundles include source/config, dataset
+identity/splits/scales, actual modules and strict prerequisite hashes, training state,
+optimizer/scheduler/scaler/RNG/counters/history. Resume requires recorded scientific
+source/config. Never rename legacy weight keys or load random new modules as a
+compatible checkpoint. Frozen dependencies have canonical files and are deduplicated
+by persistent object hashes.
 
-Portable inference exports contain graph/observation/context encoders, conditional
-flow, learned evolution, spatial/scalar decoders, transforms and provenance. They
-need no external A1/A2 file or dataset at inference. Resume requires the original
-stage directory, optimizer/RNG state, hashed dependencies and compatible scientific
-source. Never convert old weights by renaming state keys.
+On Colab stop/save old training first, start a fresh runtime, open the updated
+notebook and upload this ZIP in step1. Optional EXPECTED_SOURCE_SHA256 comes from
+its adjacent hash. Existing source caches/snapshots are preserved. Resume reloads
+that run's ORIGINAL source/source.zip. Do not change source under active training.
+Step4 preflights the requested workload; step6 is explicit and off by default.
+CPU/MPS pipeline and fresh-source local notebook execution do not verify CUDA,
+live Colab or mounted Drive. Tiny models are scientifically unevaluated.
+
+## Retained legacy performance notes
 
 Performance update —31 October2026: docs/training-performance.md documents native
 precision selection, bounded reference/frozen caches, timing semantics and the
@@ -103,3 +112,13 @@ pdeflow-continuous-measurement-times-source.zip on the originating checkout, wit
 adjacent .sha256 and notebook. This path is an output, intentionally excluded from
 itself. Follow docs/measurement-times.md → Exact notebook reload for fresh-kernel
 installation and independent A2/B policy review without changing an old run.
+
+The November1 spatial-conditioning revision additionally includes B0–B3 selectors,
+versioned direct sensor attention, independent wave kinematic objective, explicit
+quantity weights and shared bounded comparison tools. Follow
+`docs/spatial-conditioning.md` for safe Colab source reload, exact frozen-parent
+copy/warm-start commands and outstanding T4/Drive acceptance. Source packages do
+not contain the downloaded parent checkpoints or immutable diagnostic cases:
+obtain your own verified complete resumable artifact, or generate new shared
+validation cases through the supplied probe tool. All models used here remain
+research models; tiny probes do not establish improved reconstruction accuracy.

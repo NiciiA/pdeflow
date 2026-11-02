@@ -41,6 +41,9 @@ def _compute_job(directory, checkpoint):
     from pdeflow.evaluation import export_result
     directory = Path(directory)
     request = read_json(directory / "request.json")
+    if request.get("kind")=="mesh":
+        from pdeflow.mesh.inference import compute_job as mesh_job
+        return mesh_job(directory,checkpoint)
     if request.get("kind")=="coordinate":
         from pdeflow.coordinate.inference import compute_job as coordinate_job
         return coordinate_job(directory,checkpoint)

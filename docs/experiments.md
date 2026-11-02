@@ -574,3 +574,67 @@ explicit times. New B default differs from historical15/35/45/5 mixture. Existin
 checkpoints remain unchanged. No substantial new training, CUDA/Colab execution or
 scientific comparison of sensor distributions was launched. The tiny A1/A2/B=2/2/2
 execution is pipeline evidence only. See measurement-times.md and verification.md.
+
+### Actual downloaded run investigation —1 November 2026
+
+Run20261101T153417-b088674d2622 completed A1/A2/B2500 each, ordinary MSE,
+effective batch32/microbatch16, continuous_uniform B times, decoded likelihood
+beta0 and A2 physics0. Matching source, normalizations and stage tensor lineage
+are verified.20 fixed validation oracles show A2/held-initial MSE ratios .0241 heat
+u, .2965 wave u, .6402 wave v; velocity-only pulse is worse than holding initial.
+A1 initial wave-v error remains substantial. Seven real inverse cases and three
+fixed-noise ablation suites expose weak value/location use and additional B initial
+errors. More steps do not reliably reduce truth error. None of these findings is a
+universal accuracy or calibrated uncertainty claim. Test split untouched.
+
+A predeclared20-step observation-only latent correction improves conditioning fit
+more than held-out/domain error with all weights frozen. A20-update new diagnostic
+head improves latent regression but not decoded quality consistently. No main-model
+training occurred. B component telemetry was last-microbatch rather than full-batch;
+actual gradients were correct. Fix tested without changing actual inference outputs.
+Full metrics, source/checkpoint hashes, limitations and future unexecuted control:
+trained-model-analysis.md and outputs/trained-model-analysis-20261101/.
+
+## Spatial conditioning controls —1 November2026
+
+Executed additive outputs: outputs/spatial-conditioning-20261101. Exact completed
+2500-update A1/A2/B parents remain untouched. Four new B0–B3 warm-start probes use
+8 successful updates each, same32 new examples (16heat/16wave), FP32 effective4 /
+micro2 / accumulation2, unchanged actual width384/tokens128/layers8, data/points/
+continuous time policies and frozen A1/A2. Beta0/.01 and pooled/spatial form a2×2
+ablation; aux active on7/8 successful updates when configured. Added reader591,425
+parameters. Evaluation uses identical saved Gaussian noise and immutable validation
+cases/observations, per-quantity held-out and conditioning errors, field time
+breakdowns, parameter error and spread. Results are mixed/poor; no accuracy gain.
+
+New spatial deterministic head20 updates,4fixed train+4validation: latent errors
+decrease substantially, decoded fields barely improve; same-case sensor/held-out
+comparisons can worsen. Separate12-update tiny kinematic derivative control lowers
+fixed-probe residual, not evidence of improved wave trajectories. Source-compatible
+frozen-backbone inventories, exact probe configs/histories/exports and full local
+restore evidence are saved. No new main A1/A2 training, substantial B run or CUDA
+execution. Next: validation-selected200-update B0/B1 comparison with the same
+frozen parents and conservative declared warm-start LR, then independent B2/B3
+and A2 kinematic comparisons. Full protocol and Colab commands: spatial-conditioning.md.
+
+
+## Mesh-family bounded implementation checks —2 November2026
+
+Outputs: outputs/mesh-family-20261102. All M1–M5 trainable stages executed real
+forward/backward and standalone export/loading. Fixed TRAIN subset:2 examples,
+one heat/one wave, FP32 pipeline capacity, effective/microbatch2, Q24,20 updates
+per stage with fixed observations/time/noise; objectives decrease in all8 stages.
+Uniform validation remains mixed/poor: final M1/M2/M3/M4/M5 ratios to a constant
+TRAIN-mean baseline ≈1.188/.983/1.560/1.021/1.127. Dynamics-only oracle ratios
+≈.084 are not inverse reconstruction. These are trainability diagnostics, not
+accuracy rankings; no test selection or substantial model training. Two shared
+immutable validation cases compare all candidates and actual2500-update legacy
+using exact same measurements/queries and fixed-noise pairing controls. Costs
+and different datasets/capacities/budgets are confounds, no superiority claim.
+
+CPU pipeline preflight measures warmup2+6 successful updates per stage, matching
+actual requested points/objectives/batches. MPS two-update execution checks cover
+all5, including corrected equivalent scalar diffusion schedule. CUDA/T4 and live
+Colab/Drive not executed. Next experiment order M1→M2→M3→matched M4/M5, with
+held-out stage gates and full prerequisite/warm costs. Preserve untouched test.
+Details, raw records, commands and capacity counts: mesh-family.md.

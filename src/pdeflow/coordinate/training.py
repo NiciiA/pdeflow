@@ -4,7 +4,7 @@ import math
 import torch
 from pdeflow.runtime import file_digest,digest
 from .contracts import CoordinateConfig
-from .joint import ARCHITECTURE,schema
+from .joint import ARCHITECTURES,architecture,schema
 
 SCHEMA='operator_physical_state_v2'
 
@@ -38,9 +38,10 @@ def data_config(c):
 
 def read_checkpoint(path,stage=None):
     cp=torch.load(path,map_location='cpu',weights_only=True)
-    if cp.get('schema')!=SCHEMA or cp.get('architecture')!=ARCHITECTURE:raise ValueError('Legacy architecture — incompatible with operator-aware physical-state v2. Existing weights are preserved; no trajectory-to-state conversion exists.')
+    if cp.get('schema')!=SCHEMA or cp.get('architecture') not in ARCHITECTURES:raise ValueError('Legacy architecture — incompatible with operator-aware physical-state v2. Existing weights are preserved; no trajectory-to-state conversion exists.')
     if stage and cp['stage']!=stage:raise ValueError('Requires '+stage+' checkpoint; actual '+cp['stage'])
     c=checkpoint_config(cp)
+    if cp['architecture']!=architecture(c):raise ValueError('Checkpoint architecture does not match its declared conditioning version')
     if cp.get('config_identity')!=digest(cp['config']) or digest(cp.get('joint_schema'))!=digest(schema(c)):raise ValueError('Checkpoint configuration/schema identity mismatch')
     for family,ns in cp['normalizations'].items():
         if family not in c.family_weights or any(not math.isfinite(n['scale']) or n['scale']<=0 for n in ns):raise ValueError('Invalid quantity normalization')

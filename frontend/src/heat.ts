@@ -2,6 +2,15 @@ import type { Problem } from "./types";
 export type HeatConfig = {
   family: "heat" | "wave";
   c: number;
+  wave_phase: number;
+  direction: number;
+  center1: number[];
+  center2: number[];
+  width1: number;
+  width2: number;
+  amplitude2: number;
+  complexity: number;
+  velocity_background: number;
   velocity_initial: number[][] | null;
   velocity_preset: string;
   preset: string;
@@ -24,6 +33,15 @@ export type HeatConfig = {
 export const defaults: HeatConfig = {
   family: "heat",
   c: 0.4,
+  wave_phase: 0,
+  direction: 1,
+  center1: [0.35, 0.5],
+  center2: [0.7, 0.65],
+  width1: 0.12,
+  width2: 0.1,
+  amplitude2: -0.7,
+  complexity: 3,
+  velocity_background: 0.5,
   velocity_initial: null,
   velocity_preset: "zero",
   preset: "cosine",
@@ -61,6 +79,11 @@ export type Reference = {
   velocity_range?: number[];
   exact: number[][][] | null;
   range: number[];
+  wave_preset?: {
+    description: string;
+    omega: number;
+    velocity_override: boolean;
+  };
   exact_max_error: number | null;
   verification: Record<string, unknown> | null;
 };
@@ -71,6 +94,9 @@ export type HeatModel = {
   reason: string;
   pipeline_check: boolean;
   status: string;
+  architecture?: string;
+  initial_only?: boolean;
+  generative?: boolean;
 };
 export type Reconstruction = {
   frames: number[][][];
@@ -80,6 +106,9 @@ export type Reconstruction = {
   problem: Problem;
   metrics: {
     seconds: number;
+    initial_only?: boolean;
+    prediction_kind?: string;
+    architecture?: string;
     checkpoint_sha256?: string;
     checkpoint_updates?: number;
     sensor_diagnostics?: {
@@ -98,6 +127,8 @@ export type Reconstruction = {
         }
       >;
     };
+    training_configuration?: Record<string, unknown>;
+    correction?: Record<string, unknown> | null;
     inferred_parameters?: Record<string, number[]>;
     physics?: Record<string, unknown>;
     normalizations?: { mean: number; scale: number }[];

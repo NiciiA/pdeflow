@@ -969,3 +969,56 @@ reference(t) is diagnostic, not a rigorous representation-error lower bound. The
 fixed-time aggregate uses trapezoidal time weights, and individual physical metrics
 remain available. Spectral power0 is phase-preserving grid MSE by Parseval, not
 frequency-selective supervision. See measurement-times.md and a2-investigation.md.
+
+### Trained-model audit reductions
+
+Actual-run oracle aggregates average per-case physical MSE within each family and
+quantity, then take a square root for RMSE. They do not average case RMSE or mix u/v
+units. Within a trajectory use periodic spatial node quadrature and normalized
+trapezoid physical-time weights on explicitly evaluated times. Reference-state
+reencoding is a separate diagnostic, not an error lower bound. Large strong residuals
+were cross-checked using independent decreasing-step differences; approximate grid
+energy and four-point autodiff residuals are labelled as such.
+
+B training component telemetry now applies the SAME per-example averaging over the
+entire effective batch as the differentiated loss, including incomplete microbatches.
+FM and beta-weighted endpoint contributions remain distinct; sensor counts sum,
+raw per-case likelihood penalties average. This is detached logging only. Original
+trained-run logs retain their historical last-microbatch meaning; no data or loss was
+retroactively altered. See trained-model-analysis.md.
+
+## Targeted B / wave kinematic experiments (1 November2026)
+
+See spatial-conditioning.md for exact reductions. New sensor logits add a learned
+bias of sin/cos periodic normalized displacement (local anchors only), physical
+sensor time and quantity/group roles; global/scalar tokens get zero spatial bias
+features. Attention remains global and set-permutation invariant. Chunked online
+softmax uses running maxima, FP32 numerator and denominator; valid null prevents
+empty-set normalization failure. Original pooled conditioning remains a baseline.
+B's existing straight-path endpoint likelihood is reused, with exact per-sensor
+times, explicit Gaussian/discrepancy/noiseless semantics and recorded beta/range.
+A1 weighted active-field average defaults to equal u/v and parameter weight.1,
+without changing TRAIN-derived normalization. Independent optional A2 kinematic
+loss is weight×mean[((physical u_t-v)/(TRAIN u scale / interval duration))²] on
+wave-only uniform continuous probes; derivatives traverse actual T and frozen D.
+It does not assert latent dZ_u/dt=Z_v, replace supervised u/v or double count the
+existing wave_u physics coefficient. Physical and flow times remain distinct.
+
+
+## Physical mesh candidates —2 November2026
+
+The new M1–M5 mathematical contracts and FM/VP-v/DDIM derivations are implemented
+in mesh-family.md (Stochastic equations and Objectives sections). Physical state
+is TRAIN-normalized nodal u0/v0 plus affine log D/c; heat-v/known parameters are
+masked. M1 directly infers initial state; M2 evolves it by state+tau*learned_delta,
+static coefficient exact. State-only smooth periodic decoding supports derivative
+losses; representation bandwidth and soft residual probes limit accuracy claims.
+Per-example equal active quantities and explicit initial/trajectory weights avoid
+pooling solutions/regions/times. Region MSE remains a detached signed periodic
+reference-defined stratified estimator; standard MSE is the new deterministic
+default. Physical sensor time, query time, flow/diffusion time and training update
+are distinct. FGN independent two-draw fair CRPS includes the subtraction term;
+zero-noise supervision is not an ensemble mean. M4 straight physical-state FM
+and M5 discrete cosine VP-v are genuinely distinct. No sampling conversion or
+exact posterior guarantee is asserted. Complete wave presets, c² convention,
+matched velocities, periodic pulses and zero-mode formulas are in mesh-family.md.

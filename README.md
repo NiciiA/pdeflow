@@ -1,19 +1,22 @@
 # PDEFlow
 
 A research framework for reconstructing PDE fields from incomplete measurements,
-with a broader 1D–3D chemistry and steering goal. The active playground uses an
-**Operator-Aware Generative Latent Neural Operator v2**, shared by periodic 2D
-heat and wave equations. It generates initial physical states and unknown typed
-scalars, then predicts dynamics with a learned graph-conditioned evolution operator.
-There is no unrestricted trajectory latent or reference-solver inference shortcut.
+with a broader1D–3D chemistry and steering goal. **New training defaults to M1, an
+observation-informed physical mesh model.** M2 adds learned continuous evolution;
+M3 is an FGN-style stochastic model; M4/M5 are distinct physical-state flow and
+diffusion models. All share periodic2D heat/wave conditioning and explicit u0/v0
+state. They require no mandatory separately trained autoencoder latent target.
 
-The repository contains two-update pipeline fixtures and a user-imported Medium
-model with **2,500 successful flow updates**. Its saved reconstructions are poor;
-[the reconstruction diagnosis](docs/reconstruction-diagnosis.md) separates actual
-sensor fit, initial-state error, oracle-stage availability and bounded correction.
-Resolution flexibility does not demonstrate fine-detail recovery.
-Historical Fourier-inverse superiority and non-monotonic test-budget results remain
-unchanged; no matched accuracy comparison of this architecture has been run.
+The original factorized A1/A2/B models, implementation and checkpoints are retained
+as explicit legacy baselines. The imported2500-update model remains poor; no new
+accuracy improvement is claimed. The new20-update trainability exports are execution
+diagnostics, not useful pretrained defaults. Finer coordinate queries do not prove
+finer detail. CUDA/live Colab/Drive have not been executed for the new family.
+
+See [the complete mesh guide](docs/mesh-family.md) for exact M1–M5 objectives,
+parameter counts, local/Colab suite commands, verified restore and comparisons.
+The [verification record](docs/verification.md) separates CPU/MPS/browser evidence
+from unexecuted scientific experiments.
 
 ## Install and start
 
@@ -39,15 +42,14 @@ Ctrl-C stops its own children. Use your supported Node installation on PATH.
 
 ## Shortest wave journey
 
-Choose **Wave** under Equation → choose **Standing mode**, **Travelling wave** or
-another preset → select an independent Initial velocity, or **Draw your own** and
+Choose **Wave** under Equation → choose **Standing mode**, **Travelling wave**, **Two-pulse interference**, **Velocity-only pulse** or **Multimode waves**. Matched standing/travelling presets supply consistent velocity. Or **Draw your own** and
 choose **Draw quantity** u₀/v₀ → Play or scrub physical time. Travelling wave supplies
 its analytically matched velocity; velocity-only pulse explicitly sets u₀=0.
 Simulation works without a model. The drawing target is explicit; editing one field
 preserves the other. Display quantity selects displacement u or velocity v=u_t.
 
 Choose Measurement quantity u/v and Random, Evenly spaced, Feature-focused or Click
-points → **Take measurements** → import/select a compatible v2 model → **Run model**.
+points → **Take measurements** → import/select a compatible mesh or legacy v2 model → **Run model**.
 **Infer wave speed c jointly** hides true c from conditioning. Heat has the analogous
 known/unknown D option. For smoke models, explicitly check **Barely trained**.
 Compare reference/model/error; change Error metric or Error map independently.
@@ -55,7 +57,34 @@ Physical diagnostics expands residuals and measured invariant drift. Profiles re
 physical spatial integrals of the selected quantity. Time/quantity changes reuse the
 same generated initial state. Metric changes do not change observations or weights.
 
-Existing v1/older weights are preserved and incompatible; no weight conversion or
+## New training and comparison
+
+Train model → choose M1–M5, capacity, budget and Training equations → optional
+field loss (MSE default) → Preflight selected model → Train model. Stop/resume and
+current-stage validation previews are on the same screen. Legacy baseline and
+comparison opens the retained A1/A2/B controls. No training starts on page open.
+
+```bash
+pdeflow mesh plan --candidate M1 --capacity xsmall --updates 500 --device mps --output outputs/m1-config.json
+pdeflow mesh preflight --config outputs/m1-config.json --output outputs/m1-run
+pdeflow mesh train --config outputs/m1-config.json --output outputs/m1-run
+pdeflow mesh resume --run outputs/m1-run --device mps
+pdeflow mesh import --checkpoint outputs/m1-run/export/model.pt --workspace outputs/local
+```
+
+For Colab open notebooks/colab.ipynb in a **fresh runtime**, upload the current
+source ZIP, configure Drive, choose candidate or SUITE=True, explicitly preflight,
+then explicitly enable RUN_TRAINING. The [mesh guide](docs/mesh-family.md) has exact
+restore/export and immutable-case comparison instructions. Never replace scientific
+source beneath active training. The original notebook is retained as
+notebooks/legacy-factorized-colab.ipynb for recorded A1/A2/B experiments.
+
+## Retained legacy workflow and evidence
+
+The older A1/A2/B commands and measurements below describe the retained legacy
+architecture. They do not define the new default or establish new-family accuracy.
+
+The following legacy model examples retain their original loader. New mesh checkpoints have separate architecture IDs; no weight conversion or
 automatic retraining occurs. A smoke export produced during this implementation is:
 `outputs/operator-wave-20261030/final-cpu/flow/coordinate.pt`.
 Import via the UI, or register it explicitly:
@@ -224,3 +253,27 @@ learning results. The current remote Colab run's actual artifacts remain needed;
 the document includes a read-only export cell and safe Drive-verification procedure.
 Do not reload new scientific source inside an active training process. Preserve its
 verified snapshot/source; use a NEW experiment for the revised observation policy.
+
+## Actual trained-model investigation
+
+The downloaded run `20261101T153417-b088674d2622` has matching completed A1/A2/B
+checkpoints at2,500 successful updates each. [The scientific diagnosis](docs/trained-model-analysis.md)
+reports actual encoder/evolution oracles, fixed-noise conditional inference,
+conditioning ablations, physics checks and observation-only correction. A1 is
+imperfect, A2 is useful for heat but weak for wave velocity/consistency, and B adds
+a large initial-state/conditioning error. A full-batch B component-logging defect
+was fixed; the training objective and stored weights were unchanged. Original
+artifact hashes and preserved source are verified. CPU/MPS execution is distinct
+from historical T4 training; no new CUDA/Colab execution was performed.
+
+Targeted conditioning experiments (1 November2026): **Train model → Conditional
+experiment (B)** and notebook step3 expose B0 baseline, B1 direct spatial sensor
+attention, B2 endpoint observation supervision, and B3 both. New-run A1 remains
+Standard MSE; region-balanced/spectral options remain available. Wave-only A2
+`evolution.kinematic` and A1 `representation_weights` are independent advanced
+experiments, off/unchanged by default. Strict legacy loading, explicit new-run
+warm starts, exact frozen-source audits and full artifact persistence are described
+in [spatial-conditioning.md](docs/spatial-conditioning.md), with runnable Colab
+configuration and reload/acceptance instructions. Eight-update comparisons and a
+20-update deterministic control were executed; **no accuracy improvement is
+established**. Preserve the original completed2500-update model for comparison.

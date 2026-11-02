@@ -11,7 +11,7 @@ import torch
 from pdeflow.runtime import RuntimeSpec,write_json,read_json,atomic_write,digest,file_digest,code_identity,environment,synchronize
 from pdeflow.local import run_lock,now
 from .contracts import CoordinateConfig
-from .joint import ARCHITECTURE,schema,layout,options as joint_options,path as flow_path,flow_loss,active_mask
+from .joint import architecture,schema,layout,options as joint_options,path as flow_path,flow_loss,active_mask
 from .optimization import options,precision,learning_rate,scientific_source,model_contract,resume_contract,representation_contract
 from .dataset import Dataset,state_samples,state_samples_batch,item_quantity,family_for
 from .model import Autoencoder,Velocity
@@ -92,7 +92,7 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
     field_objective=training_summary(c);print(field_objective['description'],flush=True)
     root=Path(output).resolve();root.mkdir(parents=True,exist_ok=True);device,_=RuntimeSpec(**c.runtime).resolve();policy,amp=precision(o['precision'],device)
     autocast=lambda:torch.autocast(device.type,dtype=amp) if policy!='fp32' else nullcontext()
-    total=getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[stage]);saved=None;source_override=False;effective_examples=0;dep=None;dependency_cp=None;settings=o[stage]
+    total=getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[stage]);saved=None;source_override=False;effective_examples=0;dep=None;dependency_cp=None;dependency_audit=None;warm_start=None;settings=o[stage]
     with run_lock(root):
         checkpoint=root/'resume.pt'
         if not resume and any(p.name!='.run.lock' for p in root.iterdir()):raise FileExistsError('Fresh stage requires an empty directory; choose a new run or explicit resume')
@@ -103,7 +103,10 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             if dependency is None:raise ValueError('Stage '+stage+' requires its frozen preceding stage')
             expected='autoencoder' if stage=='evolution' else 'evolution';dependency=Path(dependency).resolve();dependency_cp,dc=read_checkpoint(dependency,expected)
             if not dependency_cp['completed'] or representation_contract(c)!=representation_contract(dc):raise ValueError('Incompatible/uncompleted representation/evolution dependency')
-            if dependency_cp['scientific_source']['sha256']!=source_identity['sha256'] and not o['allow_source_change']:raise ValueError('Frozen dependency scientific source differs')
+            if dependency_cp['scientific_source']['sha256']!=source_identity['sha256'] and not o['allow_source_change']:
+                if o['dependency_source_policy']!='verified_frozen_v2':raise ValueError('Frozen dependency scientific source differs; verified_frozen_v2 requires the original source archive and unchanged physical implementation')
+                from .dependency_compatibility import frozen_source
+                dependency_audit=frozen_source(dependency,dependency_cp)
             dep={'path':os.path.relpath(dependency,root),'sha256':file_digest(dependency),'stage':expected,'progress':dependency_cp['progress']}
             if saved and saved['dependency']!=dep:raise ValueError('Frozen stage dependency changed')
         data=Dataset(c,root if stage=='autoencoder' else (dependency.parent/dependency_cp['dataset_root']).resolve() if dependency_cp.get('dataset_root') else dependency.parent,create=stage=='autoencoder' and not resume)
@@ -114,6 +117,9 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
         if stage=='flow':ae.eval()
         if stage=='evolution':ae.evolution.requires_grad_(True);ae.graph_encoder.requires_grad_(True)
         model=Velocity(c).to(device) if stage=='flow' else ae
+        if o['flow_warm_start'] and not resume and stage=='flow':
+            from .dependency_compatibility import initialize_flow
+            warm_start=initialize_flow(model,c,o['flow_warm_start'],dependency,dependency_cp)
         optimizer=torch.optim.Adam([p for p in model.parameters() if p.requires_grad],lr=settings['learning_rate'],weight_decay=settings['weight_decay']);scaler=torch.amp.GradScaler('cuda',enabled=policy=='fp16',init_scale=o['initial_scale']);step=0;attempted=0;skipped_total=0;overflow_streak=0;history=[]
         mean=dependency_cp.get('latent_mean') if dependency_cp else None;scale=dependency_cp.get('latent_scale') if dependency_cp else None
         if saved:
@@ -125,7 +131,7 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             from .random_state import restore as restore_ambient
             restore_ambient(saved.get('ambient_rng'))
             if device.type=='cuda' and saved.get('cuda_rng'):torch.cuda.set_rng_state_all(saved['cuda_rng'])
-        record={'kind':'coordinate_stage_run','id':root.name,'schema_version':2,'architecture':ARCHITECTURE,'stage':stage,'precision':policy,'batch_settings':__import__('pdeflow.training_settings',fromlist=['resolve_batches']).resolve_batches(c)[stage],'training_physics':physics,'specialist':'heat+wave' if len(c.family_weights)>1 else next(iter(c.family_weights)),'config':resolved_config,'resolved_field_loss':field_objective,'source':code_identity(),'scientific_source':source_identity,'config_identity':config_identity,'state':'preparing','progress':step,'budget':total,'pid':os.getpid(),'created_at':now(),'export':str(root/('autoencoder.pt' if stage=='autoencoder' else 'evolution.pt' if stage=='evolution' else 'coordinate.pt')),'dependency':dep}
+        record={'kind':'coordinate_stage_run','id':root.name,'schema_version':2,'architecture':architecture(c),'stage':stage,'precision':policy,'batch_settings':__import__('pdeflow.training_settings',fromlist=['resolve_batches']).resolve_batches(c)[stage],'training_physics':physics,'specialist':'heat+wave' if len(c.family_weights)>1 else next(iter(c.family_weights)),'config':resolved_config,'resolved_field_loss':field_objective,'source':code_identity(),'scientific_source':source_identity,'config_identity':config_identity,'state':'preparing','progress':step,'budget':total,'pid':os.getpid(),'created_at':now(),'export':str(root/('autoencoder.pt' if stage=='autoencoder' else 'evolution.pt' if stage=='evolution' else 'coordinate.pt')),'dependency':dep,'frozen_dependency_audit':dependency_audit,'warm_start':warm_start or (saved or {}).get('warm_start')}
         if stage=='evolution':
             from .evolution_telemetry import ownership
             record['a2_path_audit']=ownership(ae,optimizer)
@@ -187,11 +193,12 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                     from .evolution_telemetry import record as measure
                     measure(components,item['family']+'_'+('u','v')[j],losses[-1])
                 else:components[item['family']+'_'+('u','v')[j]]=losses[-1].detach()
-            return torch.stack(losses).mean()
+            from .quantity_weights import combine
+            return combine(c,losses) if stage=='autoencoder' else torch.stack(losses).mean()
 
         def one(item,iteration,defer=False):
             family=item['family']
-            if stage!='flow' and (loss_settings(c.field_loss).type=='spectral_mse' or c.evolution.get('physics',{}).get('weight',0)>0):
+            if stage!='flow' and (loss_settings(c.field_loss).type=='spectral_mse' or c.evolution.get('physics',{}).get('weight',0)>0 or c.evolution.get('kinematic',{}).get('weight',0)>0):
                 rows=batching.plans(c,[item],g,iteration,stage,norms,cache,timings,item_quantity,grouped_queries)
                 return batching.forward(c,ae,rows,stage,norms,device,timings,targets,differentiable_loss,item_quantity,components)[0]
             from .temporal import state_time
@@ -200,7 +207,7 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             if stage=='autoencoder':
                 t=state_time(c,iteration,g,'encoder')
                 z,f,p=encode(item,t);field=fields(item,z,f,p,[t]);scalar=(ae.decode_parameter(z,families=f)-p).square().mean();components['scalar']=scalar.detach()
-                return field+.1*scalar+jo['latent_regularization']*z.square().mean()
+                return field+__import__('pdeflow.coordinate.quantity_weights',fromlist=['settings']).settings(c.representation_weights)['parameter']*scalar+jo['latent_regularization']*z.square().mean()
             if stage=='evolution':
                 tb=phase;ta=float(torch.rand((),generator=g))*tb if iteration%2 else 0.;tm=(ta+tb)/2
                 with torch.no_grad():za,f,p=encode(item,ta);zt,_,_=encode(item,tb);z0,_,_=encode(item,0.)
@@ -251,7 +258,8 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             from .observation_objective import endpoint_loss
             with timings.measure('observation_endpoint_compute'):
                 extra,info=endpoint_loss(ae,c,state,prediction,s,latent_mean_device,latent_scale_device,p,known,f,observations,norms,step,c.seed+iteration)
-            components.update(info,flow_matching=base_flow_loss)
+            from .evolution_telemetry import flow_rows
+            flow_rows(components,base_flow_loss,extra,info)
             loss=loss+extra.mean()
             return loss
 
@@ -284,7 +292,8 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             with timings.measure('observation_endpoint_compute'):
                 # Independent selection seed per example, invariant to microbatch partition.
                 extra,info=endpoint_loss(ae,c,state,prediction,s,latent_mean_device,latent_scale_device,p,known,f,tuple(observations),norms,step,c.seed+iteration)
-            components.update(info,flow_matching=losses.detach().mean())
+            from .evolution_telemetry import flow_rows
+            flow_rows(components,losses.detach(),extra,info)
             return list(losses+extra)
 
         def calibrate():
@@ -310,7 +319,7 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
             tick=time.perf_counter()
             if stage=='autoencoder' and completed:
                 calibration_started=time.perf_counter();mean,scale=calibrate();record['latent_calibration_seconds']=time.perf_counter()-calibration_started
-            cp={'schema':SCHEMA,'architecture':ARCHITECTURE,'engine_version':6,'joint_schema':joint_schema,'stage':stage,'config':resolved_config,'config_identity':config_identity,'progress':step,'attempted_updates':attempted,'successful_optimizer_updates':step,'skipped_updates':skipped_total,'overflow_streak':overflow_streak,'counter_semantics':'successful_updates_v1','initial_config':saved.get('initial_config',saved['config']) if saved else resolved_config,'continuation_history':(saved.get('continuation_history',[]) if saved else [])+([{'from_config':saved['config'],'to_config':resolved_config,'reason':'explicit batch/budget continuation','timestamp':now()}] if saved and saved['config']!=resolved_config else []),'batch_settings':__import__('pdeflow.training_settings',fromlist=['resolve_batches']).resolve_batches(c)[stage],'completed':completed,'autoencoder':ae.state_dict() if stage!='flow' else None,'velocity':model.state_dict() if stage=='flow' else None,'dependency':dep,'dataset_root':os.path.relpath(data.root,root),'dataset_identity':data.metadata['sha256'],'training_ids':[x for x in data.metadata['ids'] if x.startswith('train:')],'normalization':data.metadata['normalization'],'normalizations':norms,'normalization_fitted_ids':data.metadata['fitted_ids'],'latent_mean':mean,'latent_scale':scale,'optimizer':optimizer.state_dict(),'scheduler':{'settings':settings,'completed_updates':step,'semantics':'successful optimizer updates only'},'scaler':scaler.state_dict(),'rng':g.get_state(),'torch_rng':torch.get_rng_state(),'ambient_rng':__import__('pdeflow.coordinate.random_state',fromlist=['capture']).capture(),'cuda_rng':torch.cuda.get_rng_state_all() if device.type=='cuda' else [],'source':code_identity(),'scientific_source':source_identity,'environment':environment(RuntimeSpec(**c.runtime)),'history':history,'actual_precision':policy,'source_change_override':source_override,'effective_examples_processed':effective_examples,'field_loss':c.field_loss,'resolved_field_loss':field_objective,'conditioning_policy':jo,'observation_time_policy':c.observation_time,'feature_placement_time_policy':'legacy fixed t=.237 u map' if c.observation_time['policy']=='legacy_mixture_v1' else 'Per quantity, at most placement_groups equal-width temporal bins; reference map at mean actual sensor time, 32x32 analysis; background fraction .25; exact measurement evaluation','a2_target_time_policy':{'policy':c.evolution.get('time_policy','legacy_query_v1'),'mixture':__import__('pdeflow.coordinate.temporal',fromlist=['policies']).policies(c)['query']},'target_cache_identity':cache_identity,'training_seconds':time.perf_counter()-started,'training_physics':physics,'capabilities':{'state_schemas':physics['state_schemas'],'families':list(c.family_weights),'family_weights':c.family_weights,'dimension':2,'fields':['u','v (wave only)'],'state':'initial displacement + initial velocity(wave) + typed scalar; no trajectory latent','parameter_ranges':{'diffusivity':c.diffusivity_range,'wave_speed':c.wave_speed_range},'temporal':{'mode':'continuous','interval':list(c.interval),'observation_time_policy':c.observation_time,'observation_training':'Recorded sampling policy; timestamp-capable encoding does not establish multi-time scientific accuracy'},'unconditional_trained':c.unconditional_probability>0 or c.observation_counts[0]==0,'scientific_accuracy':False}}
+            cp={'schema':SCHEMA,'architecture':architecture(c),'engine_version':6,'joint_schema':joint_schema,'stage':stage,'config':resolved_config,'config_identity':config_identity,'progress':step,'attempted_updates':attempted,'successful_optimizer_updates':step,'skipped_updates':skipped_total,'overflow_streak':overflow_streak,'counter_semantics':'successful_updates_v1','initial_config':saved.get('initial_config',saved['config']) if saved else resolved_config,'continuation_history':(saved.get('continuation_history',[]) if saved else [])+([{'from_config':saved['config'],'to_config':resolved_config,'reason':'explicit batch/budget continuation','timestamp':now()}] if saved and saved['config']!=resolved_config else []),'batch_settings':__import__('pdeflow.training_settings',fromlist=['resolve_batches']).resolve_batches(c)[stage],'completed':completed,'autoencoder':ae.state_dict() if stage!='flow' else None,'velocity':model.state_dict() if stage=='flow' else None,'dependency':dep,'dataset_root':os.path.relpath(data.root,root),'dataset_identity':data.metadata['sha256'],'training_ids':[x for x in data.metadata['ids'] if x.startswith('train:')],'normalization':data.metadata['normalization'],'normalizations':norms,'normalization_fitted_ids':data.metadata['fitted_ids'],'latent_mean':mean,'latent_scale':scale,'optimizer':optimizer.state_dict(),'scheduler':{'settings':settings,'completed_updates':step,'semantics':'successful optimizer updates only'},'scaler':scaler.state_dict(),'rng':g.get_state(),'torch_rng':torch.get_rng_state(),'ambient_rng':__import__('pdeflow.coordinate.random_state',fromlist=['capture']).capture(),'cuda_rng':torch.cuda.get_rng_state_all() if device.type=='cuda' else [],'source':code_identity(),'scientific_source':source_identity,'environment':environment(RuntimeSpec(**c.runtime)),'history':history,'actual_precision':policy,'source_change_override':source_override,'effective_examples_processed':effective_examples,'field_loss':c.field_loss,'resolved_field_loss':field_objective,'conditioning_policy':jo,'frozen_lineage':{'evolution':dep['sha256'],'autoencoder':dependency_cp.get('dependency',{}).get('sha256')} if stage=='flow' else {'autoencoder':dep['sha256']} if stage=='evolution' else {},'frozen_dependency_audit':dependency_audit,'warm_start':warm_start or (saved or {}).get('warm_start'),'observation_time_policy':c.observation_time,'feature_placement_time_policy':'legacy fixed t=.237 u map' if c.observation_time['policy']=='legacy_mixture_v1' else 'Per quantity, at most placement_groups equal-width temporal bins; reference map at mean actual sensor time, 32x32 analysis; background fraction .25; exact measurement evaluation','a2_target_time_policy':{'policy':c.evolution.get('time_policy','legacy_query_v1'),'mixture':__import__('pdeflow.coordinate.temporal',fromlist=['policies']).policies(c)['query']},'target_cache_identity':cache_identity,'training_seconds':time.perf_counter()-started,'training_physics':physics,'capabilities':{'state_schemas':physics['state_schemas'],'families':list(c.family_weights),'family_weights':c.family_weights,'dimension':2,'fields':['u','v (wave only)'],'state':'initial displacement + initial velocity(wave) + typed scalar; no trajectory latent','parameter_ranges':{'diffusivity':c.diffusivity_range,'wave_speed':c.wave_speed_range},'temporal':{'mode':'continuous','interval':list(c.interval),'observation_time_policy':c.observation_time,'observation_training':'Recorded sampling policy; timestamp-capable encoding does not establish multi-time scientific accuracy'},'unconditional_trained':c.unconditional_probability>0 or c.observation_counts[0]==0,'scientific_accuracy':False}}
             # Portable inference must retain actual stage budgets, not config guesses.
             provenance=dict((dependency_cp or {}).get('training_provenance',{}))
             stage_records=dict(provenance.get('stages',{}))
@@ -328,6 +337,12 @@ def train(config,output,stage,dependency=None,resume=False,stop_after=None,shoul
                 preview_path=root/'evolution-preview.json'
                 if not preview_path.exists() or read_json(preview_path)['checkpoint_update']!=step:
                     mt=time.perf_counter();publish_preview(root,c,ae,norms,[data.get('validation',i) for i in indices(c)],step);record['preview_seconds']=time.perf_counter()-mt;write_json(root/'run.json',record)
+            if stage=='flow' and step>0:
+                from .flow_monitor import publish
+                from .evolution_monitor import indices
+                preview_path=root/'flow-preview.json'
+                if not preview_path.exists() or read_json(preview_path)['checkpoint_update']!=step:
+                    mt=time.perf_counter();publish(root,c,ae,model,norms,mean,scale,[data.get('validation',i) for i in indices(c)],step);record['preview_seconds']=time.perf_counter()-mt;write_json(root/'run.json',record)
             if event:event({'stage':stage,'kind':'checkpoint','path':str(root),'record':record,'continuing':not completed})
 
         record['setup_seconds']=time.perf_counter()-setup_started

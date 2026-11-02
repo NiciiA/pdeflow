@@ -97,7 +97,7 @@ def gallery(c,output):
     write_json(Path(output).with_suffix('.json'),{'records':records,'meaning':'Same deterministic underlying field at native / twice-finer FFT reference. Discretization discrepancy, not learned error; inspect before substantial training.'});return records
 
 
-def profile(c,local_root,allow_cpu_check=False,updates=10,warmup=2):
+def profile(c,local_root,allow_cpu_check=False,updates=10,warmup=2,frozen_run=None):
     if updates<warmup+5 or warmup<1:raise ValueError('Profile requires >=1 warmup and >=5 measured updates')
     from pdeflow.coordinate.profiling import distribution
     guard(c,allow_cpu_check);requested=digest(c.to_dict());o=options(c);report={'scientific_source':scientific_source()['sha256'],'requested_config':requested,'hardware':hardware(c.runtime['device']),'success':False}
@@ -109,15 +109,20 @@ def profile(c,local_root,allow_cpu_check=False,updates=10,warmup=2):
             p=Path(temporary);pc=replace(c,ae_steps=updates,evolution_steps=updates,flow_steps=max(2,updates),checkpoint_every=updates,
               training_options={**c.training_options,'validation_every':updates,'profile_components':True})
             records={}
-            for stage in ('autoencoder','evolution','flow'):
+            frozen=bool(o['flow_warm_start'])
+            if frozen and (frozen_run is None or not (Path(frozen_run)/'evolution/evolution.pt').is_file()):raise ValueError('Warm-start B preflight requires copied frozen A1/A2; call copy_frozen_dependencies before Session.preflight')
+            stages=('flow',) if frozen else ('autoencoder','evolution','flow')
+            if frozen:report['frozen_stage_reuse']={'autoencoder':file_digest(Path(frozen_run)/'autoencoder/autoencoder.pt'),'evolution':file_digest(Path(frozen_run)/'evolution/evolution.pt'),'scope':'B-only preflight; frozen stages are not trained or timed'}
+            for stage in stages:
                 stage_root=p/stage
-                r=train(pc.to_dict(),stage_root,stage,p/'evolution/evolution.pt' if stage=='flow' else p/'autoencoder/autoencoder.pt' if stage=='evolution' else None)
+                dependency=(Path(frozen_run)/'evolution/evolution.pt') if frozen else p/'evolution/evolution.pt' if stage=='flow' else p/'autoencoder/autoencoder.pt' if stage=='evolution' else None
+                r=train(pc.to_dict(),stage_root,stage,dependency)
                 rows=read_json(stage_root/'history.json');measured=rows[warmup:];seconds=float(np.median([v['step_seconds'] for v in measured]));records[stage]={'step_seconds':seconds,
                     'update_wall_seconds':distribution([v['step_seconds'] for v in measured]),'end_to_end_update_seconds':distribution([v['end_to_end_seconds'] for v in measured]),'examples_per_second':pc.batch_size/seconds,'warmup_rows':rows[:warmup],
                     'setup_seconds':r['setup_seconds'],'final_persistence_and_calibration_seconds':r['final_persistence_and_calibration_seconds'],'latent_calibration_seconds':r.get('latent_calibration_seconds',0.),'cache_bytes':sum(f.stat().st_size for f in stage_root.rglob('*') if f.is_file() and 'latent-targets' in f.parts),'frozen_cache':rows[-1]['frozen_cache'],'cache_population_and_io_seconds':sum(sum((v.get('component_timings') or {}).get('host_exclusive_seconds',{}).get(k,0.) for k in ('frozen_cache_store','target_cache_io')) for v in rows),'skipped_updates':sum(v['optimizer_update_skipped'] for v in rows),
                     'data_seconds':float(np.mean([v['data_seconds'] for v in rows])),'validation_seconds':sum(v.get('validation_seconds',0) for v in rows),'component_timings_after_warmup':[v.get('component_timings') for v in measured],'memory':r.get('memory',{'note':'Device peak allocation unavailable for this backend'}),'checkpoint_bytes':sum(f.stat().st_size for f in stage_root.glob('*.pt')),
                     'successful_updates_per_second':sum(not v['optimizer_update_skipped'] for v in measured)/sum(v['step_seconds'] for v in measured),'rough_training_seconds':getattr(c,{'autoencoder':'ae_steps','evolution':'evolution_steps','flow':'flow_steps'}[stage])*sum(v['step_seconds'] for v in measured)/sum(not v['optimizer_update_skipped'] for v in measured) if any(not v['optimizer_update_skipped'] for v in measured) else None,'cost_scope':'Warmup excluded from update distribution. End-to-end updates include scheduled validation/persistence. Setup and final calibration/export separate. Duration estimate excludes these costs; not a deadline guarantee.'}
-            t=time.perf_counter();representation(p/'autoencoder/autoencoder.pt',p/'representation-validation.json',c.runtime['device'],subset=min(2,c.validation_count));report['physical_validation_seconds']=time.perf_counter()-t
+            t=time.perf_counter();representation(Path(frozen_run)/'autoencoder/autoencoder.pt' if frozen else p/'autoencoder/autoencoder.pt',p/'representation-validation.json',c.runtime['device'],subset=min(2,c.validation_count));report['physical_validation_seconds']=time.perf_counter()-t
             t=time.perf_counter();validate_flow(p/'flow/coordinate.pt',p/'flow-validation.json',c.runtime['device'],subset=1,counts=[max(1,c.observation_counts[0])],noises=[0.],particles=1,steps=2,resolution=16)
             report['flow_reconstruction_validation_seconds']=time.perf_counter()-t
             report.update(success=True,stages=records)
@@ -221,7 +226,7 @@ class Session:
     def preflight(self,updates=10,warmup=2):
         from .local import is_locked
         if is_locked(self.root):raise ValueError('Stop the active training worker before resource preflight')
-        result=profile(self.c,self.root.parent,self.allow_cpu_check,updates,warmup);write_json(self.root/'profile.json',result);return result
+        result=profile(self.c,self.root.parent,self.allow_cpu_check,updates,warmup,frozen_run=self.root);write_json(self.root/'profile.json',result);return result
     def sync(self,force=False,tag=None):
         from .persistence import publish
         if not self.persistence_enabled:return None
@@ -280,6 +285,10 @@ class Session:
             if not prof['success'] or prof.get('scientific_source')!=scientific_source()['sha256'] or prof['requested_config']!=digest(self.c.to_dict()) or stable(prof['hardware']['gpu'])!=stable(hardware(self.c.runtime['device'])['gpu']):
                 raise ValueError('Profile does not match this configuration/GPU; profile the current settings before substantial training')
         dependency=None
+        if stages=='flow' and options(self.c)['flow_warm_start']:
+            dependency=self.root/'evolution/evolution.pt'
+            if not dependency.is_file():raise ValueError('Copy the exact frozen A1/A2 into this NEW B run before training')
+        if representation_run and dependency is not None:raise ValueError('Frozen B warm start already declares A1/A2; do not replace representation_run')
         if representation_run:
             other=Session(self.c,representation_run,self.root.parent,self.persistent.parent,self.allow_cpu_check)
             if not (other.root/'autoencoder/autoencoder.pt').exists():other.restore()

@@ -1,4 +1,4 @@
-"""Detached, bounded A2 measurements; never used to weight the objective."""
+"""Detached, bounded stage measurements; never used to weight the objective."""
 import torch
 
 
@@ -8,6 +8,23 @@ def record(components,key,values):
 
 def summary(components):
     return {**{k:v for k,v in components.items() if k!='_measurements'},**{k:torch.cat(v).mean() for k,v in components.get('_measurements',{}).items()}}
+
+
+def flow_rows(components,flow,extra,info):
+    """Reduce actual per-example objectives over ALL forward microbatches.
+
+    Counts sum, raw endpoint penalties average by example, beta is a step setting.
+    Recording a last-microbatch mean would disagree with the differentiated loss.
+    """
+    record(components,'flow_matching',flow)
+    record(components,'objective_observation_auxiliary',extra)
+    counts={'observation_selected','observation_population','observation_gaussian_values','observation_tolerance_values','observation_eligible_examples'}
+    for key,value in info.items():
+        if key in counts:components[key]=components.get(key,0)+value
+        elif key in ('observation_endpoint_loss','observation_effective_beta_case_mean'):record(components,key,value.expand(flow.numel()))
+        elif key=='observation_flow_s_min':components[key]=torch.minimum(components.get(key,value),value)
+        elif key=='observation_flow_s_max':components[key]=torch.maximum(components.get(key,value),value)
+        else:components[key]=value
 
 
 def time_rows(components,rows,horizon=1.):

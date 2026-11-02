@@ -6,7 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { TrainModel } from "./TrainModel";
+import { LegacyTrainModel as TrainModel } from "./TrainModel";
 import { emptyMathematics } from "./mathematics";
 const call = vi.hoisted(() => vi.fn());
 vi.mock("./types", () => ({ api: call }));
@@ -351,4 +351,20 @@ it("blocks invalid selections without presenting the old summary as resolved", a
     "∂u/∂τ",
   );
   expect(screen.getByRole("button", { name: "Train model" })).toBeDisabled();
+});
+it("sends the selected versioned B experiment without changing A1 loss", async () => {
+  render(<TrainModel onRefresh={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText("Conditional experiment (B)"), {target:{value:"spatial-aligned"}});
+  await waitFor(() => {
+    const latest=call.mock.calls.filter((x)=>x[0]==="/training/plan").at(-1)?.[1];
+    expect(latest.advanced.joint.conditioning.version).toBe("spatial_v1");
+    expect(latest.advanced.joint.observation_auxiliary.beta).toBe(.01);
+    expect(latest.advanced.field_loss?.type ?? "mse").toBe("mse");
+  });
+  fireEvent.change(screen.getByLabelText("Conditional experiment (B)"), {target:{value:"pooled-fm"}});
+  await waitFor(() => {
+    const latest=call.mock.calls.filter((x)=>x[0]==="/training/plan").at(-1)?.[1];
+    expect(latest.advanced.joint.conditioning.version).toBe("pooled_v1");
+    expect(latest.advanced.joint.observation_auxiliary).toEqual({});
+  });
 });

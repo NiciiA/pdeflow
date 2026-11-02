@@ -943,3 +943,72 @@ poor representation/endpoint quality, not a remedy demonstrated on the unavailab
 live Colab run. No source reload under active training; use original verified Drive
 snapshot for resume. No scope conflict with project.md: 2D heat/wave remains an
 implemented slice within the larger modular chemistry/1D–3D research goal.
+
+### Actual trained-model investigation: preserve lineage and distinguish causes
+
+Analyze run20261101T153417-b088674d2622 separately from the older model. Verified
+bundles contain the actual matching state encoder and frozen dependencies. Saved
+old playground references/measurements remain useful physical comparison cases,
+but their256×512 latent noise is incompatible with this128×384 model. Create
+explicitly identified new cases/noise; do not rewrite old checkpoint/case hashes.
+Retain the exact source ZIP, original downloads and all old results.
+
+No model-loading/normalization/time/mask/direction defect was reproduced. Fix the
+confirmed B last-microbatch component log using detached full-batch reductions;
+keep the numerical objective untouched. New source fingerprints enforce deliberate
+resume handling. Matched original/patched-source inference is identical. Diagnose
+A1 initial fidelity, A2 long/wave dynamics and B spatial conditioning separately.
+Propose a bounded one-factor endpoint-auxiliary pilot with exact frozen dependencies;
+do not automatically enlarge/retrain the model or select settings on test truth.
+
+## 1 November2026 — isolate spatial B, endpoint B, kinematic A2 and weighted A1
+
+The supplied five-page model-design revision is guidance; the user's explicit
+scope takes precedence. Existing tuple encoding/noise/masks/endpoint algebra and
+training-only normalization were sound and reused. Weak measured value-pairing
+response motivates an optional direct reader, not a claim that resampling erased
+all position. Spatial_v1 is a distinct strict checkpoint architecture; explicit
+new-run warm starts inventory copied/new keys and initially zero the new output
+branch. Frozen-source reuse audits original archive hashes and unchanged physical
+AST/reference modules; it cannot authorize changed-source optimizer replay.
+
+B0–B3 isolate route and endpoint auxiliary. A2 kinematic and A1 weights are
+independent, with MSE and equal active-quantity weights retained as defaults.
+Normalized A1 velocity error does not justify a blanket velocity-capacity increase.
+Stepping is deferred until controlled direct-time kinematic experiments show a
+persistent held-out limitation. Eight-update B probes and the deterministic head
+show mixed/poor decoded quality and weak correct-pairing advantages; no winner
+or accuracy claim. Complete new frozen-stage copies include their original source
+and streaming histories in persistent manifests. B-only preflight/controller use
+the exact copied A2, never train a replacement dependency. Details and evidence:
+spatial-conditioning.md.
+
+
+## 2 November2026 — New physical mesh family, legacy preservation
+
+The latest explicit request supersedes the older default factorized architecture
+and experimental region-balanced default. NEW runs default to M1 and ordinary
+MSE; legacy configs/loss/resume and original source remain preserved. Both design
+PDFs were read completely (9+4 pages). They are proposals, not executable specs or
+proof of success; concrete choices are adaptations documented in mesh-family.md.
+
+M1 is initial-only, later sensors are known conditioning. M2 adds learned direct
+time evolution. M3 central→stochastic uses independent fair CRPS and structured
+global/local noise, not a claimed ensemble-mean zero branch. M4/M5 use physical
+node-value targets plus typed log scalars, with disclosed TRAIN-only T/D dynamics
+pretraining. M5 uses stable VP-v rather than epsilon prediction; orthogonal clean
+endpoint and deterministic eta0 DDIM are derived. No AE-code alignment/migration.
+Regular periodic anchors, degree/cell-normalized local/coarse exchange and global
+Transformer memory retain nonlocal observation information; decoder/evolution
+receive physical state only. Exact t=0 identity and static coefficients do not
+prove valid learned trajectories or posterior calibration. Arbitrary geometry,
+new PDE families and hard physics corrections are explicitly unsupported here.
+
+Precision reuses centralized native-BF16/FP16-scaler policy. Actual MPS found an
+FP64 schedule construction error: build scalar schedule in CPU FP64 and transfer
+FP32 identically; no silent different diffusion objective. A preview scalar
+shadowing bug, suite→child preflight handoff, completed-run progress, outdated
+A1 UI wording and new loss-preview routing were corrected during integration.
+Missing historical costs are null, never invented zeros. Scientific-source
+changes require the recorded source on resume; inference loading stays explicit
+and strict on actual architecture/tensors. No substantial training or gate bypass.

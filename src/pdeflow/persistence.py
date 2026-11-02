@@ -63,7 +63,7 @@ def _names(local):
         if not p.is_file() or p.is_symlink() or any(x in ('checkpoints','profile-cache','latent-targets','__pycache__','downloads') for x in rel.parts):continue
         if p.name in ('sync-status.json','stop-request.json'):continue
         if 'batch-experiments' in rel.parts and p.suffix in ('.pt','.npz','.npy','.png'):continue
-        if (p.suffix in ('.pt','.json','.npz','.png') and p.name!='dataset.npz') or rel.as_posix()=='source/source.zip':yield rel.as_posix()
+        if (p.suffix in ('.pt','.json','.npz','.png') and p.name!='dataset.npz') or (len(rel.parts)>=2 and rel.parts[-2:] in (('source','source.zip'),('frozen-source','source.zip'))) or (p.name=='history-live.jsonl' and (len(rel.parts)==2 and rel.parts[0] in ('autoencoder','evolution','flow') or 'stages' in rel.parts)):yield rel.as_posix()
 
 
 def publish(local,persistent,keep=3,tag=None):

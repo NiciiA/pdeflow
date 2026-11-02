@@ -8,7 +8,7 @@ import json,zipfile
 import torch
 from pdeflow.runtime import read_json,write_json,file_digest,digest
 from pdeflow.coordinate.training import read_checkpoint
-from pdeflow.coordinate.joint import ARCHITECTURE
+from pdeflow.coordinate.joint import ARCHITECTURE,ARCHITECTURES
 
 
 def _entry(root,p):return {'sha256':file_digest(p),'bytes':p.stat().st_size}
@@ -16,7 +16,7 @@ def _entry(root,p):return {'sha256':file_digest(p),'bytes':p.stat().st_size}
 
 def verify_view(root,kind):
     root=Path(root);record=read_json(root/'bundles'/(kind+'.json'))
-    if record['kind']!=kind or record['architecture']!=ARCHITECTURE:raise ValueError('Artifact schema mismatch')
+    if record['kind']!=kind or record['architecture'] not in ARCHITECTURES:raise ValueError('Artifact schema mismatch')
     for name,e in record['files'].items():
         p=root/name
         if Path(name).is_absolute() or '..' in Path(name).parts or p.is_symlink() or not p.resolve().is_relative_to(root.resolve()):raise ValueError('Unsafe artifact path')
@@ -33,7 +33,7 @@ def build(root,standalone_check=True):
         required=('optimizer','scheduler','scaler','rng','torch_rng','cuda_rng','ambient_rng','dataset_identity','training_ids','normalization_fitted_ids','effective_examples_processed','attempted_updates','skipped_updates')
         missing=[name for name in required if name not in cp]
         if missing:raise ValueError('Not a complete new resumable checkpoint ('+stage+'): '+', '.join(missing))
-        if cp['architecture']!=ARCHITECTURE or not any(k.startswith('encoder.') for k in cp['autoencoder']):raise ValueError('Exact state encoder missing: '+stage)
+        if cp['architecture'] not in ARCHITECTURES or not any(k.startswith('encoder.') for k in cp['autoencoder']):raise ValueError('Exact state encoder missing: '+stage)
         if cp['scheduler']['completed_updates']!=cp['progress'] or cp['attempted_updates']!=cp['progress']+cp['skipped_updates']:raise ValueError('Stage progress/counter mismatch')
         dependency=cp.get('dependency')
         if dependency:
@@ -54,7 +54,8 @@ def build(root,standalone_check=True):
             ae.load_state_dict(cp['autoencoder'],strict=True,assign=True)
             if velocity is not None:velocity.load_state_dict(cp['velocity'],strict=True,assign=True)
             del ae,velocity
-        for p in (root/stage).glob('*.json'):canonical.add(p)
+        for pattern in ('*.json','*-preview.npz','history-live.jsonl'):
+            for p in (root/stage).glob(pattern):canonical.add(p)
         exported=root/stage/('autoencoder.pt' if stage=='autoencoder' else 'evolution.pt' if stage=='evolution' else 'coordinate.pt')
         if exported.exists():canonical.add(exported)
     if not stages:raise ValueError('No valid stage checkpoint yet; resolved configuration/source snapshot is available, no trained-model artifact exists')
@@ -63,6 +64,7 @@ def build(root,standalone_check=True):
     from pdeflow.source_bundle import verify as verify_source
     verify_source(source)
     canonical.update((source,identity))
+    if (root/'frozen-source/source.zip').exists():canonical.add(root/'frozen-source/source.zip')
     for p in root.glob('*.json'):
         if p.name not in ('sync-status.json','stop-request.json'):canonical.add(p)
     # No untouched test set is exposed for tuning. These fixed validation seeds
@@ -77,7 +79,7 @@ def build(root,standalone_check=True):
         if generative:
             from pdeflow.coordinate.inference import CoordinateBundle
             CoordinateBundle(inference,device='cpu')
-    common={'format':1,'architecture':ARCHITECTURE,'stages':stages,'generative_model_available':generative,'incomplete_stages':[s for s in ('autoencoder','evolution','flow') if s not in stages or not stages[s]['completed']],
+    common={'format':1,'architecture':cp['architecture'],'stages':stages,'generative_model_available':generative,'incomplete_stages':[s for s in ('autoencoder','evolution','flow') if s not in stages or not stages[s]['completed']],
             'accuracy':'Not established by execution or a baseline gate','resume':'Functional replay on compatible source/config; exact CPU replay tested separately. Cross-device/library bitwise replay is not promised.'}
     views={}
     for kind,paths in (('inference',inference_files),('diagnostic',canonical|inference_files),('resumable',canonical|inference_files)):

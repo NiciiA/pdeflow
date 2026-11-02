@@ -6,7 +6,7 @@ from pdeflow.source_bundle import package
 
 
 def test_notebook_structure():
-    n=json.loads(Path('notebooks/colab.ipynb').read_text());assert n['nbformat']==4 and n['metadata']['accelerator']=='GPU'
+    n=json.loads(Path('notebooks/legacy-factorized-colab.ipynb').read_text());assert n['nbformat']==4 and n['metadata']['accelerator']=='GPU'
     code=[c for c in n['cells'] if c['cell_type']=='code'];assert len(code)==8
     for i,c in enumerate(code):
         compile(''.join(c['source']),f'cell-{i}','exec');assert c['outputs']==[] and c['execution_count'] is None
@@ -21,7 +21,7 @@ def test_real_run_all_source_storage_train_save_restore(tmp_path,field_loss):
     interpreter=os.environ.get('PDEFLOW_NOTEBOOK_PYTHON')
     if not interpreter:pytest.skip('Set PDEFLOW_NOTEBOOK_PYTHON to isolated Python with real IPython and core dependencies')
     root=Path.cwd();archive=tmp_path/'source.zip';package(archive)
-    n=json.loads((root/'notebooks/colab.ipynb').read_text());cells=[''.join(c['source']) for c in n['cells'] if c['cell_type']=='code']
+    n=json.loads((root/'notebooks/legacy-factorized-colab.ipynb').read_text());cells=[''.join(c['source']) for c in n['cells'] if c['cell_type']=='code']
     replacements={
       'SOURCE_ARCHIVE = ""':f'SOURCE_ARCHIVE = {str(archive)!r}',
       'Path("/content/pdeflow-source")':f'Path({str(tmp_path/"source-cache")!r})',
@@ -34,7 +34,7 @@ def test_real_run_all_source_storage_train_save_restore(tmp_path,field_loss):
       'ALLOW_CPU_PIPELINE_CHECK = False':'ALLOW_CPU_PIPELINE_CHECK = True',
       'RUN_TRAINING = False':'RUN_TRAINING = True',
       'STAGES = "both"':'STAGES = "representation"',
-      'FLOW_OBJECTIVE = "baseline"':'FLOW_OBJECTIVE = "observation-aligned"',
+      'CONDITIONAL_EXPERIMENT = "B0"':'CONDITIONAL_EXPERIMENT = "B3"',
       'EFFECTIVE_BATCH = 8':'EFFECTIVE_BATCH = 2',
       'APPLY_BATCH_SETTINGS = False':'APPLY_BATCH_SETTINGS = True',
       'INSTALL_PROJECT = True':'INSTALL_PROJECT = False',

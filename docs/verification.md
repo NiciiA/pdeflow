@@ -1086,3 +1086,130 @@ Matching final-source two-update stage checkpoints are in pipeline-final (copied
 from that already-executed fixture); earlier pipeline-evidence is retained.
 Fresh extraction also caught and corrected the diagnostic documentation command:
 use `python -m pdeflow.cli evolution-diagnose`, not `python -m pdeflow`.
+
+## Actual trained-run investigation —1 November 2026
+
+Input: outputs/colab-imports/2026-11-01; analyzed ONLY run
+20261101T153417-b088674d2622. Output: outputs/trained-model-analysis-20261101.
+All69 input files, bundle members, source manifests and matching A1/A2/B dependencies
+verified. Complete encoder/scalar/spatial decoder/evolution/flow tensors load strictly.
+20 actual-weight validation oracles,7 conditional cases (four explicit-noise samples),
+3 conditioning/4-8-16-step suites,3 dense-time/FD physics cases, latent/interface and
+reference-isolation checks,2 observation-only20-step corrections were EXECUTED on
+MPS FP32. A new20-update diagnostic head was executed with all original tensors
+frozen. This is separate from main-model training, which was not performed.
+No test split tuning, new CUDA or live Colab execution.
+
+Executed commands and exact protocol: analysis commands.txt, logs and
+trained-model-analysis.md. Physical metrics/arrays, per-sample and ensemble results,
+figures and caveats are preserved. Saved old playground Gaussian noise has different
+layout; explicitly new comparison cases preserve old physical measurements and
+record new noise, rather than faking bitwise replay of another model.
+
+Confirmed B telemetry bug: full-batch training_loss correct, flow_matching component
+last-microbatch only. New flow_rows detached reduction tested with incomplete3+2
+batches, accumulated and batched execution, beta0/.01 and sensor-count sums.
+telemetry-tests.log:27 passed,3 unavailable-device skips; sandbox provenance child
+subprocesses emitted abort traces. telemetry-approved-tests.log:clean3 passed,
+including actual MPS three-stage execution. focused-regressions.log:3 passed
+(sensor coordinates/times/quantities, zero/noisy sigma and endpoint convention).
+archive-tests.log:3 passed (checksum failure, original-baseline protection and ZIP
+path traversal). Suites overlap; tiny regression fixtures are not accuracy evidence.
+Python3.11 grammar and whitespace checks passed for added tools/tests.
+
+Actual fixed-noise wave replay under verified preserved f2937cd7 source and the
+patched source has maximum differences0 for fields, generated latent, parameter
+and queries (before-after-replay.json). Original model weights/losses are unchanged.
+All downloaded files are rehashed against the pre-analysis baseline in preservation.json.
+There were no API/frontend services for this task. Only bounded test/analysis
+processes ran and all finished. A pre-existing user Vite process(pid69503) was
+identified and left running; this task started no verification services. Future200-update B controls are
+configured and dependency-validated, explicitly NOT executed.
+
+## Targeted spatial B / independent wave kinematic implementation —1 November2026
+
+Read the five-page Design PDE Latent Flow Model (2).pdf and actual completed-run
+analysis. Change map, equations, controlled configs and interpretation:
+spatial-conditioning.md. Evidence: outputs/spatial-conditioning-20261101.
+100 affected regressions passed,1 actual-CUDA skip;6 new sensor/derivative/AMP/
+microbatch gradient tests passed. CPU BF16 is not T4 FP16 evidence. Real tiny
+A1/A2/B0–B3 training, strict legacy/new reload, initially prediction-preserving
+warm start, incompatible resume rejection and frozen weights were exercised.
+Final Colab routing/profile tests:8 passed,1 CUDA skip. The routing-only controller
+assertion is explicitly distinct from the real numerical stage tests.
+
+Executed actual completed-parent MPS probes: B0–B3 eight updates each,16heat+
+16wave examples each; FM-only versus beta.01 endpoint (active7/8 when selected),
+pooled versus spatial. Parameter counts19,849,344/20,440,769. Same frozen2500-update
+A1/A2 copied without rewriting checkpoint hashes; all original file hashes retained.
+20-update direct spatial deterministic head and separate12-update CPU kinematic
+learning check completed. Decoded/sensor/held-out results remain poor/mixed; no
+accuracy claim. Timing fields and a corrected explanatory string are distinguished
+in timing-clarification.json; no numerical measurements were rewritten.
+
+Frontend72 tests, build, TypeScript and lint passed (3 existing refresh warnings).
+Real Chromium API/UI selector journey passed all four request/resolved configs;
+screenshot visually inspected. CPU/IPython executed all8 notebook cells from fresh
+packaging for MSE/RB and restored into an empty root:5 relevant tests passed.
+Complete actual B3 artifact local persistent snapshot/cold-root restore, all three
+artifact views and standalone CPU inference passed, including matching encoder
+via canonical A2, frozen source ZIP and streaming histories. Frozen-source/history
+omissions and B-only preflight/controller routing gaps were corrected. This is
+local-store verification, not actual Google Drive/Colab/CUDA execution.
+
+Preservation check:69 downloaded files identical to the original inventory;
+17,657 of17,658 historical output-baseline files identical, none missing. The sole
+difference is outputs/local/workbench/jobs/.run.lock, owned by pre-existing user
+PID69513/acquired15:31UTC, before this task. It is an ephemeral runtime lock;
+it was not reset or overwritten. All checkpoint/dataset/result hashes in that
+baseline are unchanged. .idea, tmp and legacy notebook remain untouched.
+Only task-owned API8099/Vite5199 verification services are stopped; pre-existing
+user services are preserved. Source ZIP/fresh extraction evidence: packaging.json,
+fresh-package-check.txt; archive excludes outputs/models/data/venvs/personal files.
+Git changes remain unstaged; no commit/staging/reset/push was attempted.
+
+## 2 November2026 — Physical mesh M1–M5
+
+Current task evidence is in outputs/mesh-family-20261102; this is new execution,
+not a relabeling of previous sessions. Both supplied PDFs were read completely;
+proposals versus explicit user requirements and implementation choices are in
+mesh-family.md. No substantial training, automatic retraining or test-set tuning.
+
+| Check | Actual result / evidence |
+|---|---|
+| Mesh numeric/objective/integration/lifecycle | 33 passed in final-mesh-tests.txt: all8 stage paths, mixed heat/wave batch versus accumulation gradients, periodic neighbors/cell exchange, permutation/padding/zero sensors, actual time/value pairing, smooth coordinate derivatives/chunk/grouping consistency, independent FGN noise/fair scores, FM endpoint and distinct VP-v/DDIM, optional RB/spectral/physics and frozen-input gradients, interruption/export/local snapshot restore/suite remaining/warm start |
+| Final affected checks | 16 passed in final-affected-tests.txt after metadata/schedule fixes; explicit tuple/list JSON resume regression passed separately (json-resume-test.txt) |
+| Shared regressions | 79 passed,2 skipped and1 stale single-time assertion initially failed; harness explicitly selects the retained current-time mode and then passes (legacy-time-harness.txt). No sampler changed to satisfy it. Includes persistence, legacy training, wave/playground, field losses and storage. Two skips require older unavailable smoke fixtures; actual legacy2500 model was loaded separately |
+| Public CLI/API/isolation | 3 passed in cli-api-tests.txt: public mesh dispatch/managed default/API default, no mesh gate bypass, production inference with Dataset.get and SpectralState.evaluate forbidden; no reference read |
+| Notebook | 3 passed in notebook-tests.txt: compile8 actual cells, fresh-source CPU single candidate and tiny full suite, export and verified local persistent restore; execution logs in notebook-single/notebook-suite. Real Colab/Drive not executed |
+| Frontend | 73 tests passed,17 files; TypeScript/Vite build passed, lint0 errors/3 pre-existing fast-refresh warnings (frontend-final-*.txt) |
+| Real browser | CUA in-app browser against actual API8099/Vite5199, no mocked numerics: M2 joint two-update RB training + actual preview/use; heat continuous8 sensors→inference; exact stored timestamps/values unchanged after display slider; travelling wave u/v/animation/initial previews; arbitrary times.02,.2,.47,.83 share total8; wave-v inference; actual preserved2500-update legacy reopening/inference; single-wave and distinct M5 summary. Screenshots, exact saved requests/resolved configs/jobs in browser/ and browser-run-evidence.json |
+| CPU bounded learning | Every stage20 fixed-TRAIN updates, objectives decrease (trainability-cpu). M1/M3/M4/M5 final minimal validation ratios >1; M2≈.983 is only a weak baseline check. Dynamics≈.084 uses oracle initial nodes, not inverse accuracy. Full table in mesh-family.md |
+| Actual MPS | All5 candidates2 updates/stage complete; M5 initially failed FP64 schedule construction, fixed to mathematically identical CPU FP64 schedule→FP32 device transfer. Affected rerun passes; mps-results.json, mps-diffusion-fix.txt. CUDA not tested |
+| Preflight/cost | Pipeline CPU all5 actual candidates/objectives:2 warmup+6 measured successful steps/stage, cold/setup/warm variability/reference/compute reports in cpu-profiles.json. These timings do not estimate Medium T4 performance |
+| Legacy comparison | Actual imported2500-update original flow/resume.pt loaded and sampled on same2 immutable validation cases as M2; legacy-shared-comparison. Different data/capacity/budgets are confounds, no new accuracy claim; unrecorded historical costs null |
+| Preservation | 18,028 pre-existing output files match baseline byte count/SHA256,0 changed/missing (preservation-before/after.json); accepted checkpoints/datasets/results/source archives unchanged |
+
+Initial failures remain in saved logs: wave periodicity harness queried outside
+supported domain (corrected endpoints); one test tried mutually exclusive RB and
+spectral modes (split tests); preview variable shadowing, missing suite child
+preflight handoff, outdated stage wording, public mesh CLI dispatch and JSON
+list/tuple resume were corrected. MPS schedule failure is an actual device bug,
+not dismissed as a test failure. No tolerances loosened to hide numeric failure.
+
+Tiny CPU training exports precede equivalent schedule-construction and later
+metadata/report fixes. Their captured source remains exact; final source strictly
+loads their actual weights for inference, while training resume requires their
+recorded source. Packaging/fresh-process verification is recorded separately in
+packaging.json and fresh-source-verification.json. The final source archive is
+pdeflow-mesh-family-20261102.zip with adjacent SHA256 and complete member manifest.
+Source includes .nvmrc, SOURCE_PACKAGE.md, lockfile and both active/new and retained
+factorized notebooks; no outputs/data/weights/secrets. Fresh-source verification
+uses final code to load every candidate, execute heat/wave scattered inference,
+load original legacy weights and exercise CLI. Notebook execution is local CPU,
+not a claim of actual Colab/CUDA/Drive.
+
+Task-owned services were API8099/PID3243 and Vite5199/PID2883, stopped after all3
+real reconstruction jobs succeeded. No user training was running/terminated.
+Git remains uncommitted, HEAD28b6a30; no staging/reset/commit attempted. Previous
+unstaged/untracked work is preserved. No automatic approval rejection in this task.

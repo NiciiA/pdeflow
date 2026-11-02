@@ -1133,3 +1133,5 @@
 }
 
 .physical-diagnostics{max-height:18rem;max-width:100%;overflow:auto;white-space:pre-wrap;font-size:.7rem;}
+
+.wave-preview-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.wave-preview-grid canvas{max-height:220px}.wave-description{line-height:1.5}.wave-initial-previews{margin:12px 0}

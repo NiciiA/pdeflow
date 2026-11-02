@@ -110,7 +110,7 @@ def main():
             p.add_argument('--allow-poor-representation', action='store_true', help='Explicitly continue despite the validation baseline gate; recorded in run provenance')
         if action == 'start':
             p.add_argument('--problem', default='heat-wave-2d', choices=['heat-2d','wave-2d','heat-wave-2d'])
-            p.add_argument('--model', default='resolution-flexible', choices=['resolution-flexible'])
+            p.add_argument('--model', default='mesh_m1_v1', choices=[*__import__('pdeflow.mesh.contracts',fromlist=['CANDIDATES']).CANDIDATES,'resolution-flexible'])
             p.add_argument('--budget', default='pipeline-check', choices=['pipeline-check','development','extended'])
             p.add_argument('--device', default='auto', choices=['auto','cpu','mps','cuda'])
             p.add_argument('--plan', action='store_true', help='Inspect resolved settings without launching')
@@ -211,7 +211,7 @@ def main():
     p=sub.add_parser('coordinate-diagnose',help='A1/oracle-A2/B and exact-sensor evaluation, never hidden-reference conditioning')
     p.add_argument('--checkpoint',required=True);p.add_argument('--case',required=True);p.add_argument('--output',required=True);p.add_argument('--evolution');p.add_argument('--representation');p.add_argument('--stages',default='a1,a2,b');p.add_argument('--ablations',action='store_true');p.add_argument('--integration-steps',default='');p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda','auto'])
     p=sub.add_parser('coordinate-diagnostic-baseline',help='Bounded deterministic observation-to-initial-latent diagnostic head')
-    p.add_argument('--checkpoint',required=True);p.add_argument('--evolution');p.add_argument('--representation');p.add_argument('--output',required=True);p.add_argument('--steps',type=int,default=20);p.add_argument('--train-cases',type=int,default=4);p.add_argument('--validation-cases',type=int,default=4);p.add_argument('--seed',type=int,default=194);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda','auto'])
+    p.add_argument('--checkpoint',required=True);p.add_argument('--evolution');p.add_argument('--representation');p.add_argument('--output',required=True);p.add_argument('--steps',type=int,default=20);p.add_argument('--train-cases',type=int,default=4);p.add_argument('--validation-cases',type=int,default=4);p.add_argument('--spatial',action='store_true',help='New direct-sensor diagnostic head; frozen parent unchanged');p.add_argument('--seed',type=int,default=194);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda','auto'])
     p=sub.add_parser('coordinate-diagnostic-correct',help='Explicit bounded observation-only initial-latent optimization with prior penalty')
     p.add_argument('--checkpoint',required=True);p.add_argument('--case',required=True);p.add_argument('--output',required=True);p.add_argument('--steps',type=int,default=20);p.add_argument('--learning-rate',type=float,default=.02);p.add_argument('--prior',type=float,default=.01);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda','auto'])
     p=sub.add_parser('coordinate-train');p.add_argument('--config',required=True);p.add_argument('--stage',choices=['autoencoder','evolution','flow'],required=True);p.add_argument('--output',required=True);p.add_argument('--autoencoder','--dependency',dest='autoencoder');p.add_argument('--resume',action='store_true');p.add_argument('--stop-after',type=int);p.add_argument('--extend',action='store_true')
@@ -222,7 +222,11 @@ def main():
     p=sub.add_parser('coordinate-compare');p.add_argument('--coordinate',required=True);p.add_argument('--baseline',required=True);p.add_argument('--output',required=True);p.add_argument('--counts',default='4,12');p.add_argument('--noise',default='0,.03');p.add_argument('--resolutions',default='8,12');p.add_argument('--seeds',default='91,92');p.add_argument('--cases',type=int,default=2);p.add_argument('--particles',type=int,default=3);p.add_argument('--steps',type=int,default=8);p.add_argument('--device',default='cpu',choices=['cpu','mps','cuda','auto'])
     p=sub.add_parser('reference-export');p.add_argument('--reference',required=True);p.add_argument('--output',required=True)
     p=sub.add_parser('reference-import');p.add_argument('--input',required=True);p.add_argument('--output',required=True)
+    p=sub.add_parser('mesh',help='New observation-informed physical mesh model family');p.add_argument('mesh_args',nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    if args.command=='mesh':
+        from pdeflow.mesh.cli import main as mesh_main
+        return mesh_main(args.mesh_args)
     try:
         from pdeflow import local
         if args.command in ('train','reconstruct','smoke','resume','train-all','resume-suite','experiment','compare','preflight','capacity-probe','coordinate-compare'):
@@ -245,7 +249,7 @@ def main():
             print(json.dumps({'output':str(Path(args.output).resolve()),'correction_steps':result['steps'],'seconds':result['seconds']},indent=2));return
         if args.command=='coordinate-diagnostic-baseline':
             from pdeflow.coordinate.diagnostic_baseline import train_baseline
-            result=train_baseline(args.checkpoint,args.output,args.evolution,args.representation,args.device,args.steps,args.train_cases,args.validation_cases,args.seed)
+            result=train_baseline(args.checkpoint,args.output,args.evolution,args.representation,args.device,args.steps,args.train_cases,args.validation_cases,args.seed,spatial=args.spatial)
             print(json.dumps({'output':str(Path(args.output).resolve()),'successful_updates':result['successful_updates'],'seconds':result['seconds']},indent=2));return
         if args.command == 'training':
             from pdeflow import training_workflow as workflow
@@ -253,7 +257,10 @@ def main():
                 advanced = {}
                 if args.field_alpha is not None and args.field_loss!='region_balanced_mse':raise ValueError('--field-alpha requires --field-loss region_balanced_mse')
                 if args.field_loss is not None:advanced['field_loss']={'type':args.field_loss,**({'alpha':args.field_alpha} if args.field_alpha is not None else {})}
-                if args.model == 'resolution-flexible':
+                if args.model in __import__('pdeflow.mesh.contracts',fromlist=['CANDIDATES']).CANDIDATES:
+                    if any(x is not None for x in (args.representation_updates,args.evolution_updates,args.flow_updates)):raise ValueError('Mesh candidates use declared stages; use --updates or mesh config budgets, not legacy A1/A2/B flags')
+                    if args.updates is not None:advanced['budgets']={stage:args.updates for stage in __import__('pdeflow.mesh.contracts',fromlist=['MeshConfig']).MeshConfig().budgets}
+                elif args.model == 'resolution-flexible':
                     if args.updates is not None:raise ValueError('Choose separate --representation-updates and --flow-updates for this model')
                     if args.representation_updates is not None:advanced['ae_steps'] = args.representation_updates
                     if args.evolution_updates is not None:advanced['evolution_steps']=args.evolution_updates

@@ -79,6 +79,7 @@ def inventory(root):
             known=(cp.get('schema_version')==1 and cp.get('kind') in ('inference','resume') and {'model','config'}<=cp.keys()) or (cp.get('stage') in ('flow','autoencoder') and {'autoencoder','config','normalization','dependency'}<=cp.keys())
             toy=_json(p.parent/'toy.json') if p.name=='toy.pt' else {}
             known|=set(cp)=={'model','samples','initial'} and toy.get('formulation')=='independent_gaussian_linear_cfm' and 'actual_optimizer_updates' in toy and str(toy.get('source',{}).get('version','')).startswith('pdeflow-')
+            known|=cp.get('schema')=='mesh_physical_state_v1' and cp.get('architecture','').startswith('mesh_') and cp.get('state_contract')=='normalized_physical_nodes_u0_v0_log_parameter_v1'
             if not known:continue
         except Exception:continue
         owner=next((a for a in p.parents if a.is_relative_to(root) and (a/'run.json').exists()),p.parent)
@@ -86,7 +87,7 @@ def inventory(root):
         key=str(owner.relative_to(root)) or '.'
         d=_json(owner/'run.json');group=groups.setdefault(key,{'id':key,'name':f'{d.get("specialist","Heat" if cp.get("stage") else "PDE")} · {d.get("stage", "fixed grid")} · {owner.name}',
             'files':[],'active':False,'dependencies':[],'model_ids':[],'dataset_ids':[],'owners':[str(owner),str(p.parent)]})
-        group['architecture_status']='Current joint model' if cp.get('architecture')=='operator_aware_physical_latent_v2' else 'Legacy architecture — incompatible with current model';
+        group['architecture_status']='Current mesh model' if cp.get('schema')=='mesh_physical_state_v1' else 'Legacy factorized baseline' if cp.get('architecture') in ('operator_aware_physical_latent_v2','operator_aware_physical_latent_v2_spatial_v1') else 'Legacy architecture — incompatible with current model';
         if group['architecture_status'].startswith('Legacy') and 'Legacy' not in group['name']:group['name']+=' · '+group['architecture_status']
         group['files'].append(str(p.relative_to(root)));group['model_ids'].append(file_digest(p)[:32])
         group['active']|=any(p.is_relative_to(a) for a in active_roots) or _locked(p.parent)

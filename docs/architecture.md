@@ -615,3 +615,30 @@ Engine≤5 absence resolves to explicit legacy_mixture_v1; engine6 ambiguity and
 changed resume distributions fail. See measurement-times.md. A2 reporting and
 read-only diagnostics are in evolution_monitor/evolution_audit; evaluation restores
 RNG and modes, and preview publication is hash-verified.
+
+## Versioned direct sensor conditioning (1 November2026)
+
+The optional spatial_v1 B reader retains original typed sensor tokens alongside
+resampled sensors and physical context, with chunked global attention and learned
+periodic anchor/time/role bias at configured flow-block cadence. Physical E/D/T
+and latent groups are unchanged; legacy pooled_v1 tensors load strictly. B0–B3
+separate this route from the existing decoded clean-endpoint auxiliary. A2's
+optional wave kinematic term and A1 quantity weights are separate experiments.
+See spatial-conditioning.md for formulas, defaults, source/dependency audits,
+warm-start inventories, executed controls and Colab instructions. No stepping
+replacement, capacity expansion or posterior guarantee was introduced.
+
+
+## Active development default —2 November2026
+
+New model creation uses the versioned observation-informed physical mesh family
+M1–M5 in src/pdeflow/mesh. The original factorized A1/A2/B implementation remains
+legacy with its original loader/config/source/resume, without key migration. New
+models share a periodic local/coarse/global backbone, typed complete physical
+initial node state, state-only coordinate decoder and optional direct-time evolution.
+M1 is initial-only; M3 is one-pass FGN-style; M4/M5 have distinct FM/VP-diffusion
+objectives and samplers on physical values, no mandatory A1 code target. Their
+training/validation/inference/lifecycle/evaluation modules remain separate. This
+periodic2D slice does not reduce the broader chemistry/1D–3D/steering purpose.
+Exact contracts, stages, formulas, parameter counts and unsupported combinations:
+mesh-family.md. Earlier architecture sections describe semantic or legacy contracts.

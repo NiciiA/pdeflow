@@ -25,7 +25,7 @@ def test_cosine_fft_independent_nonunit_domain_and_constant(tmp_path,kx,ky,phase
 
 def test_scattered_samples_exact_count_separate_noise_seed_times(tmp_path):
     cfg=Heat();r=reference(cfg,tmp_path)
-    spec=Measurements(reference_id=r['id'],count=25,time=.075,noise=.03)
+    spec=Measurements(reference_id=r['id'],count=25,time=.075,noise=.03,pattern='current')
     a=measurements(spec,tmp_path);b=measurements(spec,tmp_path)
     assert len(a['rows'])==25 and a['rows']==b['rows']
     assert all(row['time']==.075 and row['sigma']==.03 for row in a['rows'])

@@ -11,9 +11,11 @@ def options(c,stage=None):
          'workers':0,'pin_memory':True,'validation_every':c.checkpoint_every,'validation_subset':min(c.validation_count,8),
          'broad_every':max(c.checkpoint_every,5000),'broad_subset':min(c.validation_count,24),
          'calibration_count':min(c.train_count,128),'keep_periodic':2,'observation_locations':'grid',
-         'autoencoder':{},'evolution':{},'flow':{},'allow_source_change':False,'compile':False,'profile_components':False,'performance_mode':'optimized','reference_cache_items':32,'frozen_cache_items':128,'execution':'batched','frozen_prefetch':1,'stage_batches':{},'batch_selection':None,'batch_change_authorization':None,'max_consecutive_overflows':8,'initial_scale':65536.}
+         'autoencoder':{},'evolution':{},'flow':{},'allow_source_change':False,'compile':False,'profile_components':False,'performance_mode':'optimized','reference_cache_items':32,'frozen_cache_items':128,'execution':'batched','frozen_prefetch':1,'stage_batches':{},'batch_selection':None,'batch_change_authorization':None,'max_consecutive_overflows':8,'initial_scale':65536.,'dependency_source_policy':'strict','flow_warm_start':None}
     if set(c.training_options)-out.keys():raise ValueError('Unknown training options: '+', '.join(sorted(set(c.training_options)-out.keys())))
     out.update(c.training_options)
+    if out['dependency_source_policy'] not in ('strict','verified_frozen_v2'):raise ValueError('Unknown frozen dependency source policy')
+    if out['flow_warm_start'] is not None and not isinstance(out['flow_warm_start'],str):raise ValueError('flow_warm_start must name a checkpoint')
     if out['execution'] not in ('batched','accumulated'):raise ValueError('Execution: batched or accumulated')
     if type(out['frozen_prefetch'])!=int or out['frozen_prefetch'] not in (0,1):raise ValueError('Frozen prefetch must be0 or1 next chunks')
     if out['performance_mode'] not in ('optimized','legacy'):raise ValueError('Performance mode: optimized or legacy (comparison only)')
@@ -72,7 +74,7 @@ def learning_rate(settings,completed):
 
 def scientific_source():
     base=Path(__file__).parents[1]
-    names=['coordinate/contracts.py','coordinate/graph.py','coordinate/physics.py','numerics/dynamic.py','coordinate/model.py','coordinate/joint.py','coordinate/consistency.py','coordinate/observation_objective.py','coordinate/evolution_objective.py','coordinate/random_state.py','coordinate/profiling.py','coordinate/evolution_monitor.py','coordinate/evolution_telemetry.py','coordinate/training.py','coordinate/engine.py','training_settings.py','coordinate/frozen.py','coordinate/batching.py','coordinate/dataset.py','coordinate/optimization.py','coordinate/temporal.py','observation_times.py','heat_continuous.py','heat_placement.py','field_losses.py','numerics/__init__.py','core/__init__.py','equations/__init__.py']
+    names=['coordinate/contracts.py','coordinate/graph.py','coordinate/physics.py','numerics/dynamic.py','coordinate/model.py','coordinate/spatial_conditioning.py','coordinate/dependency_compatibility.py','coordinate/experiments.py','coordinate/flow_monitor.py','coordinate/quantity_weights.py','coordinate/joint.py','coordinate/consistency.py','coordinate/observation_objective.py','coordinate/evolution_objective.py','coordinate/random_state.py','coordinate/profiling.py','coordinate/evolution_monitor.py','coordinate/evolution_telemetry.py','coordinate/training.py','coordinate/engine.py','training_settings.py','coordinate/frozen.py','coordinate/batching.py','coordinate/dataset.py','coordinate/optimization.py','coordinate/temporal.py','observation_times.py','heat_continuous.py','heat_placement.py','field_losses.py','numerics/__init__.py','core/__init__.py','equations/__init__.py']
     files={n:hashlib.sha256((base/n).read_bytes()).hexdigest() for n in names}
     return {'files':files,'sha256':digest(files),'policy':'Scientific model/data/loss/numerical source, excluding notebook, docs and unrelated UI'}
 
@@ -110,10 +112,10 @@ def resume_contract(old,c,stage,extend=False):
 
 def representation_contract(c):
     """Flow-only auxiliary/cache switches do not change the frozen representation."""
-    value=model_contract(c);value.pop('observation_time',None);value['joint']={k:v for k,v in value['joint'].items() if k not in ('auxiliary','observation_auxiliary','target_cache','noiseless_probability')}
+    value=model_contract(c);value.pop('observation_time',None);value['joint']={k:v for k,v in value['joint'].items() if k not in ('auxiliary','observation_auxiliary','target_cache','noiseless_probability','conditioning')}
     # A2-only physics changes its optimizer objective, not the frozen A1 state
     # encoder/decoder schema. Strict same-stage resume still compares it above.
-    value['evolution']={k:v for k,v in value['evolution'].items() if k not in ('physics','time_policy')}
+    value['evolution']={k:v for k,v in value['evolution'].items() if k not in ('physics','time_policy','kinematic')}
     return value
 
 

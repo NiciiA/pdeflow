@@ -5,6 +5,11 @@ import math
 import torch
 
 ARCHITECTURE='operator_aware_physical_latent_v2'
+SPATIAL_ARCHITECTURE=ARCHITECTURE+'_spatial_v1'
+ARCHITECTURES=(ARCHITECTURE,SPATIAL_ARCHITECTURE)
+
+def architecture(c):
+    return SPATIAL_ARCHITECTURE if c.joint.get('conditioning',{}).get('version')=='spatial_v1' else ARCHITECTURE
 class Status(IntEnum):
     known=0
     partial=1
@@ -25,7 +30,7 @@ def options(c):
            context_depth=1,local_neighbors=4,latent_regularization=1e-5,
            known_probability=.5,noiseless_probability=0.,warmup_disclosure_coverage=True,group_weights={'initial_u':1.,'initial_v':1.,'coefficient':1.},
            target_cache=True,initial_field_loss=None,auxiliary={'field':0.,'observation':0.,'pde':0.,'minimum_s':.5},
-           observation_auxiliary={},decoder_chunk=1024)
+           observation_auxiliary={},conditioning={},decoder_chunk=1024)
     if set(c.joint)-v.keys():raise ValueError('Unknown joint settings: '+str(set(c.joint)-v.keys()))
     v.update(c.joint)
     for k in ('encoder_depth','decoder_depth','observation_depth','observation_tokens','context_depth','local_neighbors','decoder_chunk'):
@@ -43,6 +48,9 @@ def options(c):
     from .observation_objective import settings
     # Preserve absent legacy settings verbatim in old checkpoint identities.
     settings(v['observation_auxiliary'])
+    from .spatial_conditioning import settings as conditioning_settings
+    if v['conditioning']:v['conditioning']=conditioning_settings(v['conditioning'])
+    else:conditioning_settings()
     return v
 
 def layout(c):
@@ -57,7 +65,7 @@ def layout(c):
     return tuple(out)
 
 def schema(c):
-    return {'architecture':ARCHITECTURE,'groups':[asdict(g) for g in layout(c)],'statuses':{s.name:int(s) for s in Status},
+    return {'architecture':architecture(c),'groups':[asdict(g) for g in layout(c)],'statuses':{s.name:int(s) for s in Status},
             'coordinates':'physical x,y,t; periodic space; independent flow time s',
             'quantities':{'initial_u':'u(x,0)','initial_v':'v(x,0), absent for heat','coefficient':'typed D or c'},'state':{'heat':['u'],'wave':['u','v']},'graph_version':'typed_periodic_dynamic_graph_v1','evolution':'learned direct-time complete state; no trajectory latent',
             'forcing':'absent','boundary':'known periodic','domain':'box','equation':'registered heat(D)/wave(c²)'}

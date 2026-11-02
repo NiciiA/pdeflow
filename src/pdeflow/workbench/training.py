@@ -9,7 +9,7 @@ from pdeflow.local import workspace_root
 class TrainingRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
     problem: str = 'heat-wave-2d'
-    model: str = 'resolution-flexible'
+    model: str = 'mesh_m1_v1'
     budget: str = 'pipeline-check'
     device: str = 'auto'
     advanced: dict = Field(default_factory=dict)
@@ -56,13 +56,13 @@ def register(app, workspace):
     @app.post('/api/training/loss-preview')
     def loss_preview(payload: TrainingRequest):
         plan=workflow.plan(payload.model_dump())
-        if plan['model']!='resolution-flexible':raise ValueError('Field-loss preview requires the shared physical-state representation')
+        if plan['model'] not in ('resolution-flexible',*workflow.MESH_CANDIDATES):raise ValueError('Field-loss preview requires a shared physical-state model')
         from pdeflow.coordinate.contracts import CoordinateConfig
         from pdeflow.coordinate.dataset import example,state_samples,identity
         from pdeflow.field_losses import analyze,settings
         from dataclasses import replace
         import numpy as np
-        c=CoordinateConfig(**plan['config']).validate();cfg=settings(c.field_loss);key=identity(c);result=[]
+        c=__import__('pdeflow.mesh.contracts',fromlist=['MeshConfig']).MeshConfig(**plan['config']).validate().reference_config() if plan['model'] in workflow.MESH_CANDIDATES else CoordinateConfig(**plan['config']).validate();cfg=settings(c.field_loss);key=identity(c);result=[]
         if key not in preview_scales:
             pc=replace(c,encoder_points=min(32,c.encoder_points));samples={f:[[],[]] for f in c.family_weights}
             for i in range(min(12,c.train_count)):

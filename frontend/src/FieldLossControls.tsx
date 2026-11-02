@@ -14,11 +14,13 @@ export function FieldLossControls({
   onChange,
   request,
   queryPoints,
+  modelFamily = "legacy",
 }: {
   value: Record<string, unknown>;
   onChange: (value: Record<string, unknown>) => void;
   request: unknown;
   queryPoints: number;
+  modelFamily?: "legacy" | "mesh";
 }) {
   const [preview, setPreview] = useState<{
     examples: {
@@ -141,12 +143,10 @@ export function FieldLossControls({
         </>
       )}
       <small>
-        A1 trains the encoder/decoder with this field loss. A2 uses the same
-        decoded field loss through learned evolution, with the representation
-        frozen, plus transition/composition losses. B keeps its latent
-        flow-matching velocity loss, with an independently configured optional
-        endpoint observation likelihood. {queryPoints} whole-domain queries per
-        supervised quantity/time
+        {modelFamily === "mesh"
+          ? "This decoded field objective trains M1/M2, the M3 zero-noise central branch, and M4/M5 dynamics. FGN fair CRPS, physical-state FM and diffusion VP-v remain separate. No A1 encoder or latent regression is required. "
+          : "A1 trains encoder/decoder; A2 trains decoded evolution with the representation frozen plus transition/composition losses. B keeps latent FM and its optional endpoint likelihood. "}
+        {queryPoints} whole-domain queries per supervised quantity/time
         {` + ${type === "region_balanced_mse" ? (value.region_queries ?? 256) : 0} additional region-training queries per supervised quantity/time`}
         . Existing runs resume their recorded objective.
       </small>
@@ -165,7 +165,8 @@ export function FieldLossControls({
                 128,
                 1,
               )}
-              {numeric("Supervised time groups", "time_groups", 1, 16, 1)}
+              {modelFamily === "legacy" &&
+                numeric("Supervised time groups", "time_groups", 1, 16, 1)}
               {type === "region_balanced_mse" && (
                 <>
                   {numeric(

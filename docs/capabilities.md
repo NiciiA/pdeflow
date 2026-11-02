@@ -399,3 +399,49 @@ inference and MPS endpoint/A2 gradients. A2 preview/validation/reporting fixes h
 old/new-source controls and tiny fixed-trajectory learning evidence. CUDA/actual
 Colab and the live run20261101T122421-57f94d11b0a remain unverified. Representation
 gate is unchanged. Details: measurement-times.md and a2-investigation.md.
+
+### Actual completed model diagnosis
+
+Actual run20261101T153417-b088674d2622 (A1/A2/B2500 each) now has verified matching
+encoder/dependency/source artifacts and executed staged oracles, seven conditional
+cases, fixed-noise ablations, numerical/autodiff physics checks and frozen-weight
+latent correction. MPS/CPU execution is recorded, not inferred CUDA verification.
+A2 improves average held-initial error but does not conserve wave quantities well;
+B conditioning and initial reconstruction remain weak. One component-reporting
+bug was fixed with unchanged predictions/gradients. See trained-model-analysis.md.
+This adds diagnostic evidence, not another PDE family or an accurate pretrained
+model capability. No main model was retrained.
+
+### Versioned spatial B / independent wave kinematic option
+
+Implemented: pooled/spatial B0–B3 selections in local UI/shared notebook, original
+sensor access with periodic local-anchor bias/global context, existing endpoint
+auxiliary with activation telemetry, strict legacy/new exports, explicit new-run
+warm start and audited frozen E/D/T reuse, A1 active quantity weights, wave-only
+physical u_t-v objective and fresh current B previews. Frozen source and streaming
+history persistence gaps fixed; frozen-B-only preflight uses exact copied A2.
+Verified: actual CPU/MPS numerical/gradient controls,8-update B comparisons using
+completed model dependencies,20-update deterministic head,12-update tiny kinematic
+fit, actual rendered API/UI requests, fresh-source CPU notebook execution, complete
+local snapshot/restore and CPU standalone loading. Scientific accuracy is **not**
+established; new probe errors remain poor/mixed. CUDA/T4 and live Colab/Drive
+execution are unverified. See spatial-conditioning.md.
+
+
+## Mesh-family evidence —2 November2026
+
+| Capability | Implemented | Execution / scientific status |
+|---|---|---|
+| M1 initial-only deterministic reconstruction | mesh_m1_v1 | CPU/MPS bounded; later sensors valid, t>0 queries rejected; no accurate checkpoint |
+| M2 inferred state + learned direct-time evolution | mesh_m2_v1 | CPU/MPS bounded, real heat/wave UI inference; quality unestablished |
+| M3 FGN-style central/stochastic | mesh_m3_fgn_v1 | Independent draws, fair CRPS/optional energy, coherent physical state; CPU/MPS bounded, not calibrated |
+| M4 physical-node conditional FM | mesh_m4_flow_v1 | Dynamics/flow, masked straight path, Euler/Heun; CPU/MPS bounded |
+| M5 conditional VP-v diffusion | mesh_m5_diffusion_v1 | Distinct schedule/target/DDIM, CPU/MPS bounded; no CUDA result |
+| Wave reference catalogue | complete analytic/spectral u/v | Standing/travelling/pulses/interference/velocity/multimode, numerical derivative/periodic/zero-mode checks and real UI |
+| Local/Colab single/suite lifecycle | shared MeshSession/Suite | CPU fresh source, interrupt/resume, local verified snapshots/restore/export; real Colab/Drive untested |
+| Legacy factorized models | original code/IDs/loaders | Actual2500-update loader and comparison retained; old artifacts preserved |
+| Large-capacity training / accuracy | presets implemented | Counts exact; GPU fit, substantial training and held-out superiority unexecuted |
+
+The new slice supports periodic Cartesian2D heat/wave only. Existing1D–3D,
+Darcy, chemistry and steering paths remain separate. No arbitrary geometry/PDE
+generalization or tiny-model accuracy claim. See mesh-family.md.

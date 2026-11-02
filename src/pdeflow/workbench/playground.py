@@ -18,6 +18,15 @@ class Heat(BaseModel):
     c: float = Field(default=.4,gt=0,le=3)
     velocity_initial: list[list[float]] | None = None
     velocity_preset: str = 'zero'
+    wave_phase: float = Field(default=0.,ge=-7,le=7)
+    direction: int = Field(default=1,ge=-1,le=1)
+    center1: list[float] = Field(default_factory=lambda:[.35,.5],min_length=2,max_length=2)
+    center2: list[float] = Field(default_factory=lambda:[.7,.65],min_length=2,max_length=2)
+    width1: float = Field(default=.12,ge=.03,le=.4)
+    width2: float = Field(default=.1,ge=.03,le=.4)
+    amplitude2: float = Field(default=-.7,ge=-10,le=10)
+    complexity: int = Field(default=3,ge=1,le=8)
+    velocity_background: float = Field(default=.5,ge=-10,le=10)
     preset: str = 'cosine'
     D: float = Field(default=.07, ge=.0001, le=2)
     end: float = Field(default=1., gt=0, le=5)
@@ -26,8 +35,8 @@ class Heat(BaseModel):
     origins: list[float] = Field(default_factory=lambda:[0.,0.], min_length=2, max_length=2)
     amplitude: float = Field(default=.8, ge=-10, le=10)
     background: float = Field(default=.2, ge=-10, le=10)
-    kx: int = Field(default=1, ge=0, le=15)
-    ky: int = Field(default=1, ge=0, le=15)
+    kx: int = Field(default=1, ge=-15, le=15)
+    ky: int = Field(default=1, ge=-15, le=15)
     phix: float = Field(default=0, ge=-7, le=7)
     phiy: float = Field(default=0, ge=-7, le=7)
     seed: int = Field(default=73, ge=0, lt=2**32)
@@ -59,8 +68,12 @@ def reference(spec: Heat, root: Path):
     p=dynamic_problem(grid,spec.family,spec.D if spec.family=='heat' else spec.c)
     x,y=np.meshgrid(*[c.numpy() for c in grid.coordinates()],indexing='ij')
     X=(x-spec.origins[0])/spec.lengths[0];Y=(y-spec.origins[1])/spec.lengths[1]
+    from pdeflow.mesh.wave_presets import initial as wave_initial,exact_mode
+    if spec.direction not in (-1,1) or any(not 0<=v<1 for v in (*spec.center1,*spec.center2)):raise ValueError('Wave direction must be +/-1 and centers in the periodic [0,1) domain fractions')
+    wave_definition=wave_initial(spec,grid.shape) if spec.family=='wave' else None
     exact=None
-    if spec.preset in ('cosine','standing','travelling'):
+    if wave_definition is not None:initial=wave_definition[0]
+    elif spec.preset in ('cosine','standing','travelling'):
         mode=spec.amplitude*np.cos(2*np.pi*spec.kx*X+spec.phix)*np.cos(2*np.pi*spec.ky*Y+spec.phiy)
         initial=spec.background+mode
         decay=spec.D*((2*np.pi*spec.kx/spec.lengths[0])**2+(2*np.pi*spec.ky/spec.lengths[1])**2)
@@ -84,28 +97,24 @@ def reference(spec: Heat, root: Path):
     identifier=uuid.uuid4().hex;directory=contained(root,identifier)
     from pdeflow.numerics.dynamic import SpectralState
     velocity=np.zeros_like(initial)
+    wave_metadata=wave_definition[2] if wave_definition is not None else None
     if spec.family=='wave':
+        velocity=wave_definition[1] if wave_definition is not None else np.zeros_like(initial)
+        override=spec.velocity_initial is not None or spec.velocity_preset!='zero'
         if spec.velocity_initial is not None:velocity=field_array(spec.velocity_initial,grid)
         elif spec.velocity_preset=='random':velocity=spec.amplitude*smooth_initial(np.random.default_rng(spec.seed+777),grid)
         elif spec.velocity_preset=='pulse':velocity=spec.amplitude*np.exp(-(np.sin(np.pi*(X-.5))**2+np.sin(np.pi*(Y-.5))**2)/.065)
         elif spec.velocity_preset!='zero':raise ValueError('Velocity preset must be zero/random/pulse or an explicit drawing')
-        if spec.preset=='velocity_pulse':velocity=initial.copy();initial=np.zeros_like(initial)
-        if spec.preset=='travelling':
-            phase=2*np.pi*(spec.kx*X+spec.ky*Y)+spec.phix
-            omega=spec.c*np.sqrt((2*np.pi*spec.kx/spec.lengths[0])**2+(2*np.pi*spec.ky/spec.lengths[1])**2)
-            initial=spec.background+spec.amplitude*np.cos(phase);velocity=spec.amplitude*omega*np.sin(phase)
-            exact=spec.background+spec.amplitude*np.cos(phase[None]-omega*np.asarray(grid.times)[:,None,None])
-        elif spec.preset in ('cosine','standing'):
-            omega=spec.c*np.sqrt((2*np.pi*spec.kx/spec.lengths[0])**2+(2*np.pi*spec.ky/spec.lengths[1])**2)
-            exact=spec.background+np.cos(omega*np.asarray(grid.times))[:,None,None]*(initial-spec.background) if not np.any(velocity) else None
-        else:exact=None
+        if wave_metadata:wave_metadata={**wave_metadata,'velocity_override':override}
+        exact_frames=[exact_mode(spec,x,y,float(t)) for t in grid.times] if not override else [None]
+        exact=np.stack(exact_frames) if exact_frames[0] is not None else None
     solver=SpectralState(initial,velocity if spec.family=='wave' else None,tuple(spec.lengths),tuple(spec.origins),spec.family)
     from pdeflow.reference.dynamic import save
     values,manifest=save(p,solver,directory,spec.model_dump());frames=values[0];vf=values[1] if spec.family=='wave' else None
     write_json(directory/'heat-config.json',spec.model_dump())
     return {'id':identifier,'problem':p.to_dict(),'frames':frames.tolist(),'velocity_frames':vf.tolist() if vf is not None else None,'initial':initial.tolist(),'initial_velocity':velocity.tolist() if vf is not None else None,
-            'exact':exact.tolist() if exact is not None else None,'exact_max_error':float(np.max(np.abs(frames-exact))) if exact is not None else None,'range':[float(frames.min()),float(frames.max())],
-            'velocity_range':[float(vf.min()),float(vf.max())] if vf is not None else None,'diagnostics':manifest['diagnostics'],'verification':None,'formula':'u=A cos(k·x-omega t), v=A omega sin(k·x-omega t)' if spec.preset=='travelling' else 'u_t=v, v_t=c² lap(u)' if spec.family=='wave' else 'u_t=D lap(u)'}
+            'exact':exact.tolist() if exact is not None else None,'exact_max_error':float(np.max(np.abs(frames-exact))) if exact is not None else None,'range':[-float(np.abs(frames).max()),float(np.abs(frames).max())] if spec.family=='wave' else [float(frames.min()),float(frames.max())],
+            'velocity_range':[-float(np.abs(vf).max()),float(np.abs(vf).max())] if vf is not None else None,'diagnostics':manifest['diagnostics'],'verification':None,'wave_preset':wave_metadata,'formula':'u=A cos(k·x-omega t), v=A omega sin(k·x-omega t)' if spec.preset=='travelling' else 'u_t=v, v_t=c² lap(u)' if spec.family=='wave' else 'u_t=D lap(u)'}
 
 
 @lru_cache(maxsize=8)
@@ -269,12 +278,10 @@ def register(app,workspace,data,output):
         spec=read_json(spec_path) if spec_path.exists() else None
         frame=solver.frame(time,next(iter(p.known_parameters.values())),(0.,p.grid.times[-1]),quantity=quantity)
         exact=(spec['background']+(solver.initial-spec['background'])*np.exp(-spec['D']*((2*np.pi*spec['kx']/spec['lengths'][0])**2+(2*np.pi*spec['ky']/spec['lengths'][1])**2)*time)).tolist() if spec and spec['family']=='heat' and spec['preset']=='cosine' else None
-        if spec and p.family=='wave' and spec['preset'] in ('standing','cosine','travelling'):
-            x,y=np.meshgrid(*[a.numpy() for a in p.grid.coordinates()],indexing='ij');X=(x-spec['origins'][0])/spec['lengths'][0];Y=(y-spec['origins'][1])/spec['lengths'][1];omega=spec['c']*np.hypot(2*np.pi*spec['kx']/spec['lengths'][0],2*np.pi*spec['ky']/spec['lengths'][1])
-            if spec['preset']=='travelling':
-                phase=2*np.pi*(spec['kx']*X+spec['ky']*Y)+spec['phix']-omega*time;exact=(spec['background']+spec['amplitude']*np.cos(phase) if quantity=='u' else spec['amplitude']*omega*np.sin(phase)).tolist()
-            elif not np.any(solver.velocity):
-                mode=solver.initial-spec['background'];exact=(spec['background']+mode*np.cos(omega*time) if quantity=='u' else -omega*mode*np.sin(omega*time)).tolist()
+        if spec and p.family=='wave':
+            from pdeflow.mesh.wave_presets import exact_mode
+            x,y=np.meshgrid(*[a.numpy() for a in p.grid.coordinates()],indexing='ij');values=exact_mode(Heat(**spec),x,y,time,quantity) if spec.get('velocity_initial') is None and spec.get('velocity_preset','zero')=='zero' else None
+            exact=values.tolist() if values is not None else None
         return {'time':time,'frame':frame.tolist(),'exact':exact,'policy':'Finite Fourier evolution at exact requested physical time; no saved-frame interpolation'}
 
     @app.get('/api/playground/results/{identifier}/at')
@@ -283,7 +290,12 @@ def register(app,workspace,data,output):
         from pdeflow.coordinate.registry import model
         directory=contained(output,identifier)
         if app.state.jobs.get(identifier)['status']!='succeeded':raise ValueError('Wait for completed reconstruction')
-        request=read_json(directory/'request.json');entry=model(workspace,request['model_id'])
+        request=read_json(directory/'request.json')
+        if request.get('kind')=='mesh':
+            from pdeflow.mesh.registry import model as mesh_model
+            from pdeflow.mesh.inference import decode_saved as mesh_decode
+            entry=mesh_model(workspace,request['model_id']);return mesh_decode(directory/'coordinate-result',entry['export'],time,quantity)
+        entry=model(workspace,request['model_id'])
         return decode_saved(directory/'coordinate-result',entry['export'],time,quantity)
 
     @app.post('/api/playground/error-metrics')
@@ -323,6 +335,9 @@ def register(app,workspace,data,output):
             partial=row.get('state')=='partial'
             result.append({'id':row['model_id'],'name':f'{"+".join(c.family_weights)} operator · {row["progress"]} flow updates · {row["model_id"][:8]}'+(' · partial training' if partial else ''),'compatible':compatible,'reason':reason,
                            'pipeline_check':partial or max(c.ae_steps,row['progress'])<=80,'temporal':__import__('pdeflow.coordinate.temporal',fromlist=['capability']).capability(c),'status':'Scientifically unevaluated','range':list(c.diffusivity_range if p.family=='heat' else c.wave_speed_range)})
+        from pdeflow.mesh.workflow import list_models
+        for row in list_models(workspace,p):
+            result.append({'id':row['id'],'name':row['type']+(' · initial state only' if row['initial_only'] else '')+' · '+str(max(row['updates'].values()))+' updates','architecture':row['architecture'],'compatible':row['compatibility']['compatible'],'reason':row['compatibility']['summary'],'pipeline_check':row['pipeline_check'],'initial_only':row['initial_only'],'generative':row['generative'],'temporal':{'mode':'continuous','interval':row['problem']['grid']['times']},'status':row['quality']})
         return result
 
     @app.post('/api/playground/import')
@@ -339,6 +354,10 @@ def register(app,workspace,data,output):
                     stream.write(chunk)
             if not length:raise ValueError('Choose a coordinate flow export')
             temporary.rename(path)
+            raw=__import__('torch').load(path,map_location='cpu',weights_only=True)
+            if raw.get('schema')=='mesh_physical_state_v1':
+                from pdeflow.mesh.registry import register_checkpoint as register_mesh
+                row=register_mesh(path,workspace);write_json(directory/'model-import.json',{'kind':'mesh_model_import','export':str(path),'model_id':row['id']});return {'id':row['id']}
             cp,c=read_checkpoint(path,'flow')
             if c.dimension!=2 or not (cp['completed'] or cp.get('inference_ready')):raise ValueError('Choose a completed or explicitly exported partial resolution-flexible 2D heat model')
             row=register_checkpoint(path,workspace)
@@ -361,6 +380,6 @@ def register(app,workspace,data,output):
         consistency=metrics.get('observation_consistency')
         if consistency and 'predictions_per_sample' in consistency:
             from pdeflow.coordinate.diagnostic_metrics import sensor_metrics
-            metrics['sensor_diagnostics']=sensor_metrics(consistency['predictions_per_sample'],read_json(directory/'observations.json'))
+            metrics['sensor_diagnostics']=sensor_metrics(consistency['predictions_per_sample'],metrics.get('sensor_diagnostics_rows',read_json(directory/'observations.json')))
         return {'frames':samples.mean(0).tolist(),'velocity_frames':velocity.mean(0).tolist() if velocity is not None else None,'velocity_spread':velocity.std(0).tolist() if velocity is not None else None,'spread':samples.std(0).tolist(),'problem':p.to_dict(),'metrics':metrics,
                 'comparison':read_json(directory/'comparison.json') if (directory/'comparison.json').exists() else None}
