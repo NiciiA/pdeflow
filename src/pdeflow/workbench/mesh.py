@@ -50,3 +50,14 @@ def register(app,workspace,data,output):
         config=MeshConfig(**plan(payload)['config']).validate();root=workspace/'mesh-profiles';root.mkdir(exist_ok=True);result=profile(config,root,updates=8,warmup=2)
         from pdeflow.runtime import write_json,digest
         write_json(root/(digest(config.to_dict())+'.json'),result);return result
+    @app.post('/api/mesh/microbatch-benchmark')
+    def microbatch_benchmark(payload:dict):
+        from pdeflow.mesh.workflow import plan
+        from pdeflow.mesh.contracts import MeshConfig
+        from pdeflow.mesh.benchmark import microbatch_benchmark
+        from pdeflow.local import is_locked
+        if any(is_locked(p) for p in (workspace/'training-workflows').glob('*')):
+            raise ValueError('Stop active training before benchmarking on this device')
+        config=MeshConfig(**plan(payload['request'])['config']).validate()
+        root=workspace/'mesh-profiles';root.mkdir(exist_ok=True)
+        return microbatch_benchmark(config,root,payload.get('candidates',[1,2,4,8]),payload.get('updates',8),payload.get('warmup',2))

@@ -13,7 +13,43 @@ const meshModels: Record<string, string> = {
   mesh_m4_flow_v1: "M4 · Conditional physical-state flow",
   mesh_m5_diffusion_v1: "M5 · Conditional physical-state diffusion",
 };
+type StageSettings = {
+  learning_rate: number;
+  effective_batch: number;
+  microbatch: number;
+  accumulation: number;
+  last_microbatch: number;
+  optimizer: { schedule?: string; warmup?: number };
+  schedule_horizon: number;
+};
+type StageOverride = {
+  optimizer?: { schedule?: string; warmup?: number };
+  learning_rate?: number;
+  batch_size?: number;
+  microbatch?: number;
+};
+type BatchReport = {
+  candidates: {
+    microbatch: number;
+    state: string;
+    error?: string;
+    report?: {
+      estimated_total_training_seconds: number;
+      stages: Record<
+        string,
+        {
+          examples_per_second: number;
+          end_to_end_seconds_per_successful_update: number;
+          successful_updates: number;
+          skipped_updates: number;
+          memory: { cuda_peak_allocated: number | null };
+        }
+      >;
+    };
+  }[];
+};
 type Plan = {
+  training_settings?: { policy: string; stages: Record<string, StageSettings> };
   model_label: string;
   scope: string;
   updates: Record<string, number>;
@@ -86,6 +122,16 @@ export function MeshTraining({
     [budget, setBudget] = useState("development"),
     [family, setFamily] = useState("heat-wave-2d"),
     [device, setDevice] = useState("auto"),
+    [learningRate, setLearningRate] = useState(0.001),
+    [batchPolicy, setBatchPolicy] = useState("keep_updates"),
+    [stageSettings, setStageSettings] = useState<Record<string, StageOverride>>(
+      {},
+    ),
+    [benchmarkCandidates, setBenchmarkCandidates] = useState("1,2,4,8"),
+    [batchReport, setBatchReport] = useState<{
+      key: string;
+      value: BatchReport;
+    } | null>(null),
     [batch, setBatch] = useState(8),
     [micro, setMicro] = useState(8),
     [loss, setLoss] = useState<Record<string, unknown>>({ type: "mse" }),
@@ -111,14 +157,30 @@ export function MeshTraining({
       budget,
       device,
       advanced: {
+        ...JSON.parse(advanced || "{}"),
         capacity,
+        learning_rate: learningRate,
+        batch_policy: batchPolicy,
+        stage_settings: stageSettings,
         batch_size: batch,
         microbatch: micro,
         field_loss: loss,
-        ...JSON.parse(advanced || "{}"),
       },
     }),
-    [family, model, budget, device, capacity, batch, micro, loss, advanced],
+    [
+      family,
+      model,
+      budget,
+      device,
+      capacity,
+      batch,
+      micro,
+      learningRate,
+      batchPolicy,
+      stageSettings,
+      loss,
+      advanced,
+    ],
   );
   const run = runs.find((r) => r.id === selected);
   const requestKey = JSON.stringify(request),
@@ -242,14 +304,7 @@ export function MeshTraining({
           <select
             aria-label="Training budget"
             value={budget}
-            onChange={(e) => {
-              setBudget(e.target.value);
-              if (e.target.value === "pipeline-check") {
-                setCapacity("pipeline-check");
-                setBatch(2);
-                setMicro(2);
-              }
-            }}
+            onChange={(e) => setBudget(e.target.value)}
           >
             <option value="pipeline-check">
               Pipeline check · execution only
@@ -327,35 +382,213 @@ export function MeshTraining({
         uses fair CRPS; flow/diffusion use distinct physical-state objectives.
         Raw total losses across these candidates are not directly comparable.
       </p>
-      <details>
-        <summary>Advanced model and batch settings</summary>
-        <div className="number-grid">
-          <label>
-            Effective batch
-            <input
-              aria-label="Mesh effective batch"
-              type="number"
-              min={1}
-              value={batch}
-              onChange={(e) => setBatch(e.target.valueAsNumber)}
-            />
-          </label>
-          <label>
-            Forward microbatch
-            <input
-              aria-label="Mesh forward microbatch"
-              type="number"
-              min={1}
-              value={micro}
-              onChange={(e) => setMicro(e.target.valueAsNumber)}
-            />
-          </label>
+      <h3>Optimizer and batch</h3>
+      <div className="number-grid">
+        <label>
+          Learning rate
+          <input
+            aria-label="Mesh learning rate"
+            type="number"
+            min={0.000000001}
+            step="any"
+            value={learningRate}
+            onChange={(e) => setLearningRate(e.target.valueAsNumber)}
+          />
+        </label>
+        <label>
+          Effective batch
+          <input
+            aria-label="Mesh effective batch"
+            type="number"
+            min={1}
+            value={batch}
+            onChange={(e) => setBatch(e.target.valueAsNumber)}
+          />
+        </label>
+        <label>
+          GPU microbatch
+          <input
+            aria-label="Mesh forward microbatch"
+            type="number"
+            min={1}
+            max={batch}
+            value={micro}
+            onChange={(e) => setMicro(e.target.valueAsNumber)}
+          />
+        </label>
+        <label>
+          Batch budget policy
+          <select
+            aria-label="Mesh batch budget policy"
+            value={batchPolicy}
+            onChange={(e) => setBatchPolicy(e.target.value)}
+          >
+            <option value="keep_updates">Keep successful updates</option>
+            <option value="keep_examples">
+              Keep example budget (round up)
+            </option>
+          </select>
+        </label>
+      </div>
+      <p>
+        Derived accumulation: {Math.ceil(batch / micro)} forward/backward passes
+        per optimizer update; final pass{" "}
+        {batch - (Math.ceil(batch / micro) - 1) * micro} examples. Per-example
+        losses sum / effective batch. GPU microbatch also applies on CPU/MPS.
+      </p>
+      <p>
+        Learning rate 0.0001 (1e-4) is an available experiment, not a proven
+        stability fix. No automatic LR or warmup scaling. These controls
+        configure a NEW run; Resume keeps its recorded settings.
+      </p>
+      {plan?.training_settings && (
+        <div data-testid="mesh-optimizer-summary">
+          <strong>
+            Resolved AdamW · weight decay 0 · {plan.training_settings.policy}
+          </strong>
+          <table>
+            <thead>
+              <tr>
+                <th>Stage</th>
+                <th>Learning rate</th>
+                <th>Effective batch</th>
+                <th>Microbatch</th>
+                <th>Accumulation</th>
+                <th>Schedule / warmup / horizon</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(plan.training_settings.stages).map(
+                ([stage, r]) => (
+                  <tr key={stage}>
+                    <td>{stage}</td>
+                    <td>{r.learning_rate}</td>
+                    <td>{r.effective_batch}</td>
+                    <td>{r.microbatch}</td>
+                    <td>
+                      {r.accumulation} passes; last {r.last_microbatch}
+                    </td>
+                    <td>
+                      {r.optimizer.schedule || "constant"} /{" "}
+                      {r.optimizer.warmup || 0} / {r.schedule_horizon}
+                    </td>
+                  </tr>
+                ),
+              )}
+            </tbody>
+          </table>
         </div>
+      )}
+      <details>
+        <summary>Advanced model and per-stage settings</summary>
         <p>
-          {Math.ceil(batch / micro)} forward/backward passes, summing
-          per-example losses over the effective batch. Model-specific noise,
-          objective weights, corruption and samplers are optional JSON
-          overrides.
+          Optional per-stage overrides. Unchecked stages inherit the controls
+          above. Optional stage schedules and warmup are explicit
+          successful-update settings; use optimizer in the JSON below for a
+          shared schedule.
+        </p>
+        {Object.keys(planRecord?.value.training_settings?.stages || {}).map(
+          (stage) => (
+            <div key={stage}>
+              <label>
+                <input
+                  type="checkbox"
+                  aria-label={`Override ${stage}`}
+                  checked={!!stageSettings[stage]}
+                  onChange={(e) =>
+                    setStageSettings((prev) => {
+                      const next = { ...prev };
+                      if (e.target.checked) next[stage] = {};
+                      else delete next[stage];
+                      return next;
+                    })
+                  }
+                />
+                Override {stage}
+              </label>
+              {stageSettings[stage] && (
+                <div className="number-grid">
+                  {(
+                    [
+                      ["learning_rate", "Learning rate", learningRate],
+                      ["batch_size", "Effective batch", batch],
+                      ["microbatch", "GPU microbatch", micro],
+                    ] as const
+                  ).map(([key, label, fallback]) => (
+                    <label key={key}>
+                      {label}
+                      <input
+                        type="number"
+                        min={key === "learning_rate" ? 1e-9 : 1}
+                        step={key === "learning_rate" ? "any" : 1}
+                        aria-label={`${stage} ${label}`}
+                        value={stageSettings[stage][key] ?? fallback}
+                        onChange={(e) =>
+                          setStageSettings((prev) => ({
+                            ...prev,
+                            [stage]: {
+                              ...prev[stage],
+                              [key]: e.target.valueAsNumber,
+                            },
+                          }))
+                        }
+                      />
+                    </label>
+                  ))}
+                  <label>
+                    Schedule
+                    <select
+                      aria-label={`${stage} schedule`}
+                      value={
+                        stageSettings[stage].optimizer?.schedule ?? "inherit"
+                      }
+                      onChange={(e) =>
+                        setStageSettings((prev) => {
+                          const opt = { ...prev[stage].optimizer };
+                          if (e.target.value === "inherit") delete opt.schedule;
+                          else opt.schedule = e.target.value;
+                          return {
+                            ...prev,
+                            [stage]: { ...prev[stage], optimizer: opt },
+                          };
+                        })
+                      }
+                    >
+                      <option value="inherit">Inherit shared schedule</option>
+                      <option value="constant">Constant</option>
+                      <option value="cosine">Cosine</option>
+                    </select>
+                  </label>
+                  <label>
+                    Warmup updates
+                    <input
+                      aria-label={`${stage} warmup`}
+                      type="number"
+                      min={0}
+                      placeholder="Inherit shared warmup"
+                      value={stageSettings[stage].optimizer?.warmup ?? ""}
+                      onChange={(e) =>
+                        setStageSettings((prev) => {
+                          const opt = { ...prev[stage].optimizer };
+                          if (e.target.value === "") delete opt.warmup;
+                          else opt.warmup = e.target.valueAsNumber;
+                          return {
+                            ...prev,
+                            [stage]: { ...prev[stage], optimizer: opt },
+                          };
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+          ),
+        )}
+        <p>
+          Other model-specific noise, objective weights, optimizer schedule,
+          corruption and samplers are optional JSON overrides. Explicit controls
+          above take precedence.
         </p>
         <textarea
           aria-label="Mesh advanced settings"
@@ -368,6 +601,20 @@ export function MeshTraining({
               const value = JSON.parse(draft);
               if (!value || Array.isArray(value) || typeof value !== "object")
                 throw new Error("Expected JSON object");
+              for (const key of [
+                "learning_rate",
+                "batch_size",
+                "microbatch",
+                "stage_settings",
+                "batch_policy",
+                "batch_reference",
+                "capacity",
+                "field_loss",
+              ])
+                if (key in value)
+                  throw new Error(
+                    `Use the explicit control for ${key}; JSON cannot override it.`,
+                  );
               setAdvanced(draft);
               setError("");
             } catch (e) {
@@ -378,6 +625,113 @@ export function MeshTraining({
           Apply advanced settings
         </button>
         <pre>{plan ? JSON.stringify(plan.config, null, 2) : "Resolving…"}</pre>
+      </details>
+      <details>
+        <summary>Bounded GPU microbatch benchmark</summary>
+        <p>
+          Runs the selected architecture and objective, including both FGN
+          ensemble members. Eight successful updates per stage/candidate: two
+          warmup, six measured. Effective batch, learning rate, points, update
+          budget and scheduler are retained. No training run is modified. Set an
+          explicit effective batch of at least 32 to test 8,16,32; available
+          host RAM does not determine fit.
+        </p>
+        <label>
+          Microbatch candidates
+          <input
+            aria-label="Microbatch candidates"
+            value={benchmarkCandidates}
+            onChange={(e) => setBenchmarkCandidates(e.target.value)}
+          />
+        </label>
+        <button
+          disabled={!plan || busy}
+          onClick={() =>
+            void act(async () =>
+              setBatchReport({
+                key: requestKey,
+                value: await api<BatchReport>("/mesh/microbatch-benchmark", {
+                  request,
+                  candidates: benchmarkCandidates
+                    .split(",")
+                    .map((x) => Number(x.trim())),
+                  updates: 8,
+                  warmup: 2,
+                }),
+              }),
+            )
+          }
+        >
+          Benchmark microbatches
+        </button>
+        {batchReport?.key === requestKey && (
+          <>
+            <table>
+              <thead>
+                <tr>
+                  <th>Microbatch / stage</th>
+                  <th>Examples/s (steady)</th>
+                  <th>End-to-end s/update</th>
+                  <th>GPU peak bytes</th>
+                  <th>Successful / skipped</th>
+                  <th>Estimated total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {batchReport.value.candidates.flatMap((candidate) =>
+                  candidate.report
+                    ? Object.entries(candidate.report.stages).map(
+                        ([stage, r]) => (
+                          <tr key={`${candidate.microbatch}:${stage}`}>
+                            <td>
+                              {candidate.microbatch} / {stage}
+                            </td>
+                            <td>{r.examples_per_second.toFixed(2)}</td>
+                            <td>
+                              {r.end_to_end_seconds_per_successful_update.toFixed(
+                                3,
+                              )}
+                            </td>
+                            <td>
+                              {r.memory.cuda_peak_allocated ??
+                                "Unavailable on this device"}
+                            </td>
+                            <td>
+                              {r.successful_updates} / {r.skipped_updates}
+                            </td>
+                            <td>
+                              {(
+                                candidate.report!
+                                  .estimated_total_training_seconds / 3600
+                              ).toFixed(2)}{" "}
+                              hours (all stages)
+                            </td>
+                          </tr>
+                        ),
+                      )
+                    : [
+                        <tr key={candidate.microbatch}>
+                          <td>{candidate.microbatch}</td>
+                          <td colSpan={5}>
+                            {candidate.state}: {candidate.error}
+                          </td>
+                        </tr>,
+                      ],
+                )}
+              </tbody>
+            </table>
+            <p>
+              Timing projections are short-sample estimates. Setup, cold/warm
+              timings, variability and excluded export/Drive costs are in
+              Details. Apply a measured microbatch manually above, then
+              preflight the exact final configuration.
+            </p>
+            <details>
+              <summary>Benchmark details</summary>
+              <pre>{JSON.stringify(batchReport.value, null, 2)}</pre>
+            </details>
+          </>
+        )}
       </details>
       <button
         disabled={!plan || busy}

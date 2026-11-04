@@ -10,10 +10,11 @@ from .provenance import scientific_source
 from .monitoring import sync_store
 
 
-def suite_plan(capacity='medium',device='cuda',precision='auto',candidates=None,overrides=None,include_legacy=False):
+def suite_plan(capacity='medium',device='cuda',precision='auto',candidates=None,overrides=None,include_legacy=False,training_settings=None):
     selected=list(CANDIDATES) if candidates is None else list(candidates)
     if not selected or len(set(selected))!=len(selected) or set(selected)-CANDIDATES.keys():raise ValueError('Choose distinct implemented M1–M5 architectures')
-    configs={name:preset(capacity,name,device,precision,overrides).to_dict() for name in selected};legacy=None
+    from .settings import configure
+    configs={name:configure(preset(capacity,name,device,precision,overrides),**(training_settings or {})).to_dict() for name in selected};legacy=None
     if include_legacy:
         from pdeflow.colab import training_preset
         first=MeshConfig(**next(iter(configs.values()))).validate();ref=first.reference_config();legacy=training_preset(capacity,device,precision,{**first.data,'family_weights':first.family_weights,'time_interval':first.interval,'lengths':tuple(first.domain['lengths']),'origins':tuple(first.domain['origins']),'field_loss':first.field_loss,'seed':first.seed}).to_dict()

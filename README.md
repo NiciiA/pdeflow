@@ -71,6 +71,12 @@ same generated initial state. Metric changes do not change observations or weigh
 
 ## New training and comparison
 
+The mesh training screen and Colab Step 3 expose learning rate, effective batch,
+GPU microbatch and derived accumulation before training. Advanced settings allow
+per-stage overrides. See [mesh training controls and bounded benchmark](docs/mesh-training-controls.md)
+for explicit `keep_updates`/`keep_examples`, `1e-4` experiments, resume rules and
+Colab reload instructions. Existing runs keep their recorded settings.
+
 Train model → choose M1–M5, capacity, budget and Training equations → optional
 field loss (MSE default) → Preflight selected model → Train model. Stop/resume and
 current-stage validation previews are on the same screen. Legacy baseline and
@@ -171,7 +177,7 @@ checkpoint/output/device arguments. Scientific evaluation is distinct from compl
 
 ## Colab and source transfer
 
-Use the [batch configure → benchmark → apply → train guide](docs/batch-settings.md) for the active training UI and Colab notebook. It includes per-stage sizes, explicit budget policies, and authoritative Session application. The [actual A1/A2 batching guide](docs/batched-training.md) records the earlier throughput work. The earlier [T4 performance recovery](docs/training-performance.md) records the reference/precision changes. The updated preflight uses two warmup/eight measured updates, native precision detection and separate setup, reference, compute, validation and persistence clocks.
+Use [mesh optimizer/batch controls](docs/mesh-training-controls.md) for the active mesh training UI and Colab notebook. The [earlier batch configure → benchmark → apply guide](docs/batch-settings.md) applies to the retained A1/A2/B workflow. It includes per-stage sizes, explicit budget policies, and authoritative Session application. The [actual A1/A2 batching guide](docs/batched-training.md) records the earlier throughput work. The earlier [T4 performance recovery](docs/training-performance.md) records the reference/precision changes. The retained factorized preflight uses two warmup/eight measured updates. Active mesh preflight uses eight total successful updates (two warmup/six measured) and preserves the original schedule horizon. Native precision detection and separate setup/reference/compute/validation/persistence reporting remain.
 
 Open `notebooks/colab.ipynb` from the latest source ZIP. Its eight steps cover source
 verification, Drive mount/probe, science, optional benchmarks, explicit application,

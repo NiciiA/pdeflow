@@ -1040,3 +1040,21 @@ in stability_v1 are supported; no general source override/hash editing. Other
 stage/source conversions remain unsupported. Read-only collector and original-
 source one-batch diagnostic enable actual T4 diagnosis without replacing old code.
 Details: mesh-training-recovery.md.
+
+
+### 2026-11-03 — Explicit mesh optimizer/batch controls
+
+Resolve stage overrides through one mesh/settings.py helper used by the UI plan,
+Colab/Suite construction and actual trainer. Preserve ordinary loss/default LR
+and allow explicit new-run 1e-4; no stability claim. Persist settings and original
+example-budget reference. keep_updates/keep_examples are explicit; invalid warmup
+after conversion is rejected. Budget selection no longer resets capacity/batch.
+Started sessions remain immutable: unchanged resume or an explicitly new experiment,
+not an implicit optimizer-changing continuation. Keep prior source correction
+authorization pinned to its previous release.
+
+The old mesh preflight shortened config budgets, which could reject a valid long
+warmup and changed the cosine horizon. Use a distinct disposable successful-update
+limit with original config/schedule instead. Profile every actual candidate stage
+and FGN draw without changing coverage; measure GPU memory rather than infer fit
+from host RAM. Preserve failed candidate tracebacks and never auto-apply a winner.

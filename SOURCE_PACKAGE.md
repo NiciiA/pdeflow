@@ -1,5 +1,22 @@
 # PDEFlow mesh-family source package
 
+## Current mesh controls release — 2026-11-03
+
+See docs/mesh-training-controls.md for visible LR/effective batch/GPU microbatch,
+derived accumulation, per-stage overrides, explicit budget policies and bounded
+actual-model microbatch sweeps. Notebook step3 configures the actual Session before
+training; step4 optionally benchmarks, never automatically applies a winner.
+Learning rate1e-4 is a new-run experiment. Existing runs retain their own settings
+and original source. This release does not authorize an optimizer/source-changing
+continuation. The older stability transition below is pinned to its original
+release; use its separately preserved source ZIP, not this newer fingerprint.
+
+Delivery archive on the originating checkout:
+outputs/mesh-controls-20261103/pdeflow-mesh-controls-20261103.zip, with adjacent
+.sha256 and colab.ipynb. The archive excludes these output files by design.
+Restart into a fresh runtime and upload this ZIP to step1 for a NEW experiment.
+
+
 Extract and work inside pdeflow/. README.md and docs/mesh-family.md describe the
 active new M1–M5 family. notebooks/colab.ipynb is the thin single-candidate/suite
 workflow; notebooks/legacy-factorized-colab.ipynb preserves the preceding original
@@ -53,6 +70,9 @@ training state in a NEW M1 run. See docs/mesh-training-recovery.md before recove
 Do not infer a healthy remote checkpoint or CUDA stability from CPU/MPS tests.
 
 ## Retained legacy performance notes
+
+The following notes describe historical factorized releases and their notebooks;
+use the current mesh-controls guide above for the active M1–M5 notebook.
 
 Performance update —31 October2026: docs/training-performance.md documents native
 precision selection, bounded reference/frozen caches, timing semantics and the

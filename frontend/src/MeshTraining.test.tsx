@@ -20,6 +20,34 @@ it("defaults to M1/joint/MSE and keeps train explicit while routing family/loss 
         ? []
         : path === "/training/plan"
           ? {
+              training_settings: {
+                policy: (request.advanced as Record<string, unknown>)
+                  .batch_policy,
+                stages: {
+                  reconstruction: {
+                    learning_rate: (request.advanced as Record<string, unknown>)
+                      .learning_rate,
+                    effective_batch: (
+                      request.advanced as Record<string, unknown>
+                    ).batch_size,
+                    microbatch: (request.advanced as Record<string, unknown>)
+                      .microbatch,
+                    accumulation: Math.ceil(
+                      Number(
+                        (request.advanced as Record<string, unknown>)
+                          .batch_size,
+                      ) /
+                        Number(
+                          (request.advanced as Record<string, unknown>)
+                            .microbatch,
+                        ),
+                    ),
+                    last_microbatch: 2,
+                    optimizer: { schedule: "constant", warmup: 0 },
+                    schedule_horizon: 2,
+                  },
+                },
+              },
               model_label: "M1 mesh",
               scope: "Initial only",
               stages: ["reconstruction"],
@@ -62,4 +90,55 @@ it("defaults to M1/joint/MSE and keeps train explicit while routing family/loss 
   );
   expect(screen.getByLabelText("Feature balance: α")).toHaveValue(0.5);
   expect(screen.queryByText(/A1 trains/)).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Mesh learning rate")).toBeVisible();
+  expect(screen.getByLabelText("Mesh effective batch")).toBeVisible();
+  expect(screen.getByLabelText("Mesh forward microbatch")).toBeVisible();
+  fireEvent.change(screen.getByLabelText("Mesh learning rate"), {
+    target: { value: "0.0001" },
+  });
+  fireEvent.change(screen.getByLabelText("Mesh effective batch"), {
+    target: { value: "5" },
+  });
+  fireEvent.change(screen.getByLabelText("Mesh forward microbatch"), {
+    target: { value: "2" },
+  });
+  fireEvent.change(screen.getByLabelText("Mesh batch budget policy"), {
+    target: { value: "keep_examples" },
+  });
+  await waitFor(() =>
+    expect(
+      call.mock.calls.filter(([p]) => p === "/training/plan").at(-1)?.[1],
+    ).toMatchObject({
+      advanced: {
+        learning_rate: 0.0001,
+        batch_size: 5,
+        microbatch: 2,
+        batch_policy: "keep_examples",
+      },
+    }),
+  );
+  expect(screen.getByText(/Derived accumulation: 3/)).toBeVisible();
+  fireEvent.click(screen.getByText("Advanced model and per-stage settings"));
+  fireEvent.click(screen.getByLabelText("Override reconstruction"));
+  fireEvent.change(
+    await screen.findByLabelText("reconstruction Learning rate"),
+    {
+      target: { value: "0.0002" },
+    },
+  );
+  await waitFor(() =>
+    expect(
+      call.mock.calls.filter(([p]) => p === "/training/plan").at(-1)?.[1],
+    ).toMatchObject({
+      advanced: {
+        stage_settings: { reconstruction: { learning_rate: 0.0002 } },
+      },
+    }),
+  );
+  fireEvent.change(screen.getByLabelText("Training budget"), {target:{value:"pipeline-check"}});
+  expect(screen.getByLabelText("Mesh effective batch")).toHaveValue(5);
+  expect(screen.getByLabelText("Mesh forward microbatch")).toHaveValue(2);
+  expect(screen.getByLabelText("Model capacity")).toHaveValue("xsmall");
+  expect(screen.getByLabelText("Mesh learning rate")).toHaveValue(0.0001);
+  expect(call.mock.calls.some(([p]) => p === "/training/start")).toBe(false);
 });

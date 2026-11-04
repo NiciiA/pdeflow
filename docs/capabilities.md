@@ -457,3 +457,18 @@ status and measured/provisional ETA. CPU numerical/lifecycle and MPS bounded
 execution tested. Actual2269-update failure/healthy remote checkpoint/CUDA/T4/live
 Colab/Drive execution unverified. No generic source override or accuracy claim.
 Evidence and exact recovery procedures: mesh-training-recovery.md.
+
+
+### Mesh optimizer/batch controls (2026-11-03)
+
+| Capability | Status/evidence |
+|---|---|
+| Visible LR/effective batch/GPU microbatch/accumulation | Implemented; actual rendered page and local API resolved settings, mesh-controls-20261103 |
+| Stage LR/batch/schedule overrides | Actual CPU FGN central/stochastic optimizer and validation/monitor checks; persisted config/CP evidence |
+| Explicit keep_updates/keep_examples | Implemented; rounding and warmup rejection tested; no implicit LR scaling |
+| Started-run LR/batch changes | Rejected; unchanged resume supported. Optimizer-changing continuation not implemented |
+| Real selected-model microbatch sweep | Implemented; actual browser M1 and shared FGN CPU checks, exact objectives/draws retained |
+| CUDA peak/Medium T4 benchmark | Instrumented; not executed here, CUDA unavailable |
+| Learning-rate1e-4 accuracy/stability benefit | Unestablished; new-run experiment only |
+
+See mesh-training-controls.md for exact local/Colab commands and source transition.

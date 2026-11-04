@@ -42,7 +42,24 @@ class MeshSession:
         root=Path(local_root)/run_id;persistence.restore(store,root,record['id']);result=cls.reopen(root,store,device,**kwargs)
         if (root/'bundles/resumable.json').exists():artifacts.verify(root,'resumable')
         return result
-    def inspect(self):return plan(self.c)
+    def inspect(self):
+        from .settings import summary
+        return {**plan(self.c),'training_settings':summary(self.c)}
+    def configure_training(self, **settings):
+        """Apply an explicit draft setting, never reinterpret a started run as resume."""
+        if is_locked(self.root) or (self.root/'session.json').exists() or (self.root/'source/source.zip').exists():
+            raise ValueError('Training already started: resume recorded settings unchanged. Changed LR/batch requires a NEW experiment; no implicit optimizer continuation is supported.')
+        from .settings import configure, summary
+        self.c=configure(self.c,**settings)
+        (self.root/'profile.json').unlink(missing_ok=True)
+        write_json(self.root/'draft-training-settings.json',summary(self.c))
+        return summary(self.c)
+    def benchmark_microbatches(self,candidates=(1,2,4,8),updates=8,warmup=2,**kwargs):
+        if is_locked(self.root):raise ValueError('Stop the active run before benchmarking')
+        from .benchmark import microbatch_benchmark
+        report=microbatch_benchmark(self.c,self.root.parent,candidates,updates,warmup,**kwargs)
+        write_json(self.root/'microbatch-benchmark.json',report)
+        return report
     def stop(self):write_json(self.root/'stop-request.json',{'time':time.time(),'policy':'Stop after current optimizer boundary and save complete state'})
     def sync(self,tag=None):
         if self.persistent:

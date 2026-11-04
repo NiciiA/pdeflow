@@ -12,7 +12,7 @@ def validate(model,data,stage,cases=None,preview_root=None,update=None):
             batch=data.prepare(i,'validation').to(device)
             if stage=='dynamics':state=batch.target_state;scope='Oracle clean physical initial nodes, not observation-only reconstruction'
             elif stage=='central':
-                state=model.initial(model.condition(batch.observations,batch.parameter,batch.known,batch.families),batch.parameter,batch.known,batch.families,fgn_noise(c,c.batch_size,torch.Generator(),device,True));scope='Deterministic zero-noise branch, not ensemble mean'
+                state=model.initial(model.condition(batch.observations,batch.parameter,batch.known,batch.families),batch.parameter,batch.known,batch.families,fgn_noise(c,len(batch.families),torch.Generator(),device,True));scope='Deterministic zero-noise branch, not ensemble mean'
             else:
                 context=model.condition(batch.observations,batch.parameter,batch.known,batch.families);state,_=generate(model,context,batch.parameter,batch.known,batch.families,torch.Generator().manual_seed(c.seed+991));scope='Observation-only fixed-seed prediction; no reference field enters model'
             initial=predictions(model,state,batch,True);truth=batch.y0;count=batch.domain_queries;initial_mse=quantity_mean((initial[...,:count]-truth[...,:count]).square().mean(-1),batch.families);constant0=quantity_mean(truth[...,:count].square().mean(-1),batch.families);trajectory=torch.zeros_like(initial_mse);constantt=torch.zeros_like(initial_mse)

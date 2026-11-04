@@ -653,3 +653,20 @@ update is asserted and no actual failure trajectory was reproduced. CUDA/T4 and
 live Colab/Drive remain unverified. Use the exact collection and bounded T4
 acceptance in mesh-training-recovery.md before substantial continuation. No
 accuracy improvement or long-run stability result is claimed.
+
+
+### 2026-11-03 — Bounded mesh controls/throughput checks, no accuracy experiment
+
+Actual CPU FGN pipeline sweep: fixed effective batch2, MSE objective, horizon20,
+warmup10, same seeds/reference distribution and two FGN members; micro1/2, seven
+successful updates per central/stochastic stage each, zero skips. Steady examples/s
+central/stochastic: micro1 25.98/17.99, micro2 50.22/30.30. Measured-window
+end-to-end seconds/update: micro1 .0829/.1187, micro2 .0450/.0714. Setup/validation/
+checkpoint and timing scope in outputs/mesh-controls-20261103/cpu-fgn-benchmark.json.
+No CPU-to-T4 projection or optimal batch claim. Browser separately executed an M1
+pipeline CPU sweep through the new endpoint, eight successful updates/candidate.
+Stage override check used two real FGN updates each at central batch3/micro2/LR2e-4
+and stochastic batch4/micro3/LR1e-4. These checks test wiring, not learning quality.
+No controlled LR or accuracy experiment was launched. Future experiments must
+fix capacity/objective/data/seed and explicitly choose keep_updates vs keep_examples;
+those answer different questions. CUDA/Colab execution remains unverified.

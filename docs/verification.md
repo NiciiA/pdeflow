@@ -1273,3 +1273,30 @@ replacement copies are preserved in mesh-stability-20261102/preservation-excepti
 The harness now defaults to temporary evidence, or an explicitly selected destination.
 No checkpoint/dataset/model result/source archive/manifest changed. The older raw
 notebook execution-log links must not be treated as original evidence.
+
+
+## 2026-11-03 — Mesh LR/batch controls and selected-model benchmark
+
+Evidence root: `outputs/mesh-controls-20261103/`. All checks below were executed
+this session, separately from earlier T4 or architecture results. No substantial
+training. No CUDA hardware available; MPS available but not exercised in this task.
+
+- `python-tests.txt`: `.venv/bin/python -m pytest tests/test_mesh_training_settings.py tests/test_mesh_integration.py::test_batched_loss_and_gradient_equal_accumulation tests/test_mesh_integration.py::test_region_spectral_and_frozen_endpoint_gradient tests/test_mesh_stability.py tests/test_mesh_lifecycle.py -q` — **27 passed, 1 failed**. The failure is the existing real-IPython-display test: `ModuleNotFoundError: IPython`. Loss/gradient equivalence across M1–M5, region/spectral gradients, successful/skip semantics, lifecycle/export/restore and failure preservation passed. No missing-dependency pass claimed.
+- `final-python-checks.txt`: four focused checks passed after final validation of optimizer overrides: explicit policies/rounding, actual per-stage optimizer + remainder batch + immutable resume, draft configuration/preflight invalidation and notebook structure.
+- `final-settings-validation.txt`: three passed after rejecting empty/zero controls rather than resolving them to defaults; includes a final-source two-stage FGN checkpoint check.
+- `stage-monitor-recheck.txt`: three passed after fixing FGN central-validation noise batch and monitor stage sizes: real two-stage FGN with unequal stage batches, live monitor/read-only status and verified persisted-store monitoring. `persisted-stage-settings.json` records both exact-source checkpoint configs/optimizer LRs. Central: 2 successful updates, 6 examples, LR2e-4; stochastic: 2 updates, 8 examples, LR1e-4. These are pipeline checks.
+- `notebook-tests.txt`: all three notebook checks passed: compile/clean structure plus actual fresh-source execution of all eight cells, bounded single/suite CPU training, export, verified store restore and unchanged resume. Benchmark flag remains off in that test; the same benchmark path was executed separately below.
+- `frontend-tests.txt`: 72 other frontend tests passed; the updated control test initially failed due awaiting its asynchronous rendered plan. Corrected harness and stable stage form mounting; `frontend-controls-recheck.txt` and final `final-frontend-controls.txt` pass. The latter also verifies selecting an update budget does not reset explicit batch, LR or capacity. Successful suites were not repeated.
+- `final-frontend-build.txt`: TypeScript + Vite production build passed. `final-frontend-lint.txt`: no errors; three pre-existing refresh-export warnings in ui/badge.tsx, button.tsx, tabs.tsx.
+- `cpu-fgn-benchmark.json`: actual FGN pipeline central/stochastic losses, microbatches1/2, unchanged effective batch2, original scheduler horizon20/warmup10, seven successful updates per stage/candidate (two warmup/five measured), zero skips. Same initial losses/times, RNG restored; no GPU peak available on CPU. Tests also reject candidates greater than effective batch.
+- Actual rendered UI against isolated API: set joint FGN LR1e-4/batch32/micro8; choose keep_examples (500×8 →125×32); set stochastic LR2e-4/micro16/cosine/warmup10. See training-controls.png and browser-controls.txt. Matching actual API request/resolved JSON for both keep_updates and keep_examples saved separately. No production training launched.
+- Actual browser → API → numerical benchmark → rendered table: M1 pipeline CPU, LR1e-4, batch2, candidates1/2, eight successful updates each, two warmup/six measured, zero skips. Reports under workspace/mesh-profiles/microbatch-benchmark-*/report.json, summary browser-benchmark-summary.json, screenshot browser-benchmark.png. This is numerical integration, separate from mocked frontend tests.
+
+Settings/source packaging details: mesh-training-controls.md and packaging.json.
+Archive CRC/member hashes/tree/fresh-extraction checks are saved in fresh-source-verification.json.
+Preservation-before/after record existing output hashes. Only services started here
+(API41270, npm41271, Vite41378) were stopped; process inventory found no training
+worker before edits or remaining verification services. No commit, staging or reset.
+The older stability-patch authorization remains pinned to its own release; no
+general source-resume override was introduced. No accuracy/stability improvement
+is demonstrated, and 1e-4 remains experimental.

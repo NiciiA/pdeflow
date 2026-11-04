@@ -1037,3 +1037,18 @@ per-example/quantity/family weights, region balancing, time distributions, objec
 terms or optimization schedule. No nan replacement or arbitrary clamping. This
 repairs a demonstrated finite-operand FP16 overflow path; it does not prove the
 remote long-run failure originated there or guarantee stable future optimization.
+
+
+## Mesh stage batching and measurement-only schedule limits (2026-11-03)
+
+For effective stage batch B and microbatch index sets I_r partitioning all B
+examples, backward accumulates sum_r sum_{i in I_r} L_i / B before one
+optimizer step. A final smaller microbatch is not given a larger weight. L_i
+retains the existing family/active-quantity/region and model-specific reductions;
+FGN stochastic training retains two independent draws. LR is independent of B.
+New-run keep_examples sets U_new=ceil(U_original B_original/B_new), recording
+rounding; keep_updates keeps U. No implicit warmup/LR rescaling occurs.
+A bounded benchmark uses the same configured U as its scheduler horizon and
+warmup, with a separate successful-update stopping limit; its incomplete
+prerequisites are disposable and cannot qualify production stage dependencies.
+Timing windows, memory and projection limitations are in mesh-training-controls.md.

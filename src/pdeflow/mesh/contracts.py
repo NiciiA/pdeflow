@@ -46,6 +46,9 @@ class MeshConfig:
     microbatch:int=2
     learning_rate:float=.001
     optimizer:dict=field(default_factory=lambda:{'schedule':'constant','warmup':0,'minimum_ratio':.1})
+    stage_settings:dict=field(default_factory=dict)
+    batch_policy:str='keep_updates'
+    batch_reference:dict=field(default_factory=dict)
     checkpoint_every:int=10
     validation_every:int=10
     validation_cases:int=2
@@ -82,7 +85,8 @@ class MeshConfig:
         if not math.isfinite(self.learning_rate) or self.learning_rate<=0 or not 0<self.gate_ratio<=1:raise ValueError('Invalid learning rate/gate')
         if set(self.budgets)!={'reconstruction','central','stochastic','dynamics','flow','diffusion'} or any(type(x)!=int or x<1 for x in self.budgets.values()):raise ValueError('All explicit positive stage budgets required')
         if set(self.optimizer)-{'schedule','warmup','minimum_ratio','clip','max_consecutive_overflows','initial_scale'} or self.optimizer.get('schedule','constant') not in ('constant','cosine'):raise ValueError('Invalid mesh optimizer settings')
-        if self.optimizer.get('warmup',0)<0 or any(self.optimizer.get('warmup',0)>=self.budgets[s] for s in self.kind['stages']):raise ValueError('Optimizer warmup must be below every active stage budget')
+        from .settings import validate as validate_settings
+        validate_settings(self)
         if set(self.objective)-{'initial','trajectory','parameter','anchor','central','crps','energy','observation','observation_minimum_s','observation_sensor_budget','observation_tolerance_relative','observation_discrepancy_relative','kinematic','acceleration','heat','heat_mean','heat_dissipation','physics_queries'}:raise ValueError('Unknown mesh objective setting')
         if any(not isinstance(v,(float,int)) or not math.isfinite(v) or v<0 for v in self.objective.values()):raise ValueError('Objective weights/settings must be finite and nonnegative')
         for key in ('physics_queries','observation_sensor_budget'):
@@ -113,7 +117,10 @@ def preset(capacity='pipeline-check',architecture='mesh_m1_v1',device='cpu',prec
 def model_contract(c):
     # JSON persists tuples as lists; compare the serialized scientific contract.
     import json
-    return json.loads(json.dumps({k:v for k,v in c.to_dict().items() if k not in ('runtime','budgets','checkpoint_every','validation_every','validation_cases','pipeline_check')},sort_keys=True))
+    values={k:v for k,v in c.to_dict().items() if k not in ('runtime','budgets','checkpoint_every','validation_every','validation_cases','pipeline_check')}
+    for key,default in (('stage_settings',{}),('batch_policy','keep_updates'),('batch_reference',{})):
+        if values[key]==default:values.pop(key)
+    return json.loads(json.dumps(values,sort_keys=True))
 
 
 def capabilities(c):

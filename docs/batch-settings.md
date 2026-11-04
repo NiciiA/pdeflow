@@ -1,3 +1,5 @@
+> For active M1–M5 mesh training use [mesh training controls](mesh-training-controls.md). This guide records the retained factorized A1/A2/B workflow.
+
 # Configure, benchmark, apply, then train
 
 The training form and active Colab notebook now share batch resolution and an
