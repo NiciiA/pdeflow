@@ -15,7 +15,7 @@ def scientific_source():
 def read_checkpoint(path):
     cp=torch.load(path,map_location='cpu',weights_only=True)
     if cp.get('schema')!=SCHEMA or cp.get('architecture') not in CANDIDATES:raise ValueError('Not a supported mesh physical-state checkpoint; legacy uses its original loader')
-    c=MeshConfig(**cp['config']).validate()
+    c=MeshConfig.from_record(cp['config'])
     if cp['architecture']!=c.architecture or cp['config_identity']!=digest(cp['config']):raise ValueError('Mesh checkpoint configuration/architecture mismatch')
     if cp.get('state_contract')!='normalized_physical_nodes_u0_v0_log_parameter_v1':raise ValueError('Unsupported physical-state tensor contract')
     training=set(cp['training_ids'])

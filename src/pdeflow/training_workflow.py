@@ -294,6 +294,7 @@ def status(selector='latest', workspace=None):
     training_seconds = child.get('training_seconds')
     return {**record, 'state': state, 'active': active, 'stage': stage, 'stage_label': STAGE_LABELS[stage][0],
             'stage_meaning': STAGE_LABELS[stage][1], 'progress': progress, 'stage_budget': total,
+            'convergence':__import__('pdeflow.mesh.monitoring',fromlist=['status']).status(path) if record['plan']['model'] in MESH_CANDIDATES else None,
             'history': history, 'elapsed_seconds': max(0., elapsed), 'eta_seconds': eta,
             'eta_scope': 'Current learning stage only; preparation/evaluation excluded. Available after >=20 timed updates and >=10 seconds.',
             'child_state': child.get('state'), 'training_seconds': training_seconds,

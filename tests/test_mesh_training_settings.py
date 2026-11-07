@@ -77,7 +77,8 @@ def test_real_fgn_sweep_preserves_workload_schedule_and_members(tmp_path):
 def test_fgn_actual_stage_batch_validation_and_monitor(tmp_path):
     from pdeflow.mesh.training import train_stage
     from pdeflow.mesh.monitoring import status
-    c=configure(small('mesh_m3_fgn_v1'),learning_rate=1e-4,stages={
+    # Legacy validation retains its stage-dependent batch cohort; balanced v2 has independent coverage tests.
+    c=configure(small('mesh_m3_fgn_v1',validation_protocol='legacy_v1'),learning_rate=1e-4,stages={
         'central':{'learning_rate':2e-4,'batch_size':3,'microbatch':2},
         'stochastic':{'batch_size':4,'microbatch':3}})
     parent=None

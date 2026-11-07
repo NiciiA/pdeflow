@@ -71,6 +71,13 @@ same generated initial state. Metric changes do not change observations or weigh
 
 ## New training and comparison
 
+[Convergence reporting](docs/mesh-convergence.md) now separates the optimized
+objective from fixed decoded-field validation and shows heat u / wave u / wave v.
+NEW runs default to `validation_every=250` (plus initial/final, no duplicates)
+and `training_smoothing_window=100` successful updates. Configure these under
+Advanced in Train model, or Colab step 3; existing runs retain their own cadence.
+Colab step 5 reconnects read-only with the same plots used during live training.
+
 The mesh training screen and Colab Step 3 expose learning rate, effective batch,
 GPU microbatch and derived accumulation before training. Advanced settings allow
 per-stage overrides. See [mesh training controls and bounded benchmark](docs/mesh-training-controls.md)

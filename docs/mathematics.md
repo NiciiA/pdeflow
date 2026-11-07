@@ -1052,3 +1052,29 @@ A bounded benchmark uses the same configured U as its scheduler horizon and
 warmup, with a separate successful-update stopping limit; its incomplete
 prerequisites are disposable and cannot qualify production stage dependencies.
 Timing windows, memory and projection limitations are in mesh-training-controls.md.
+
+
+## Fixed mesh convergence metrics (2026-11-07)
+
+The optimized training objective and decoded-field validation are different.
+For fixed held-out case i, quantity q and time h, normalized query MSE is
+e_iqh=mean_p[(u_hat-u)/s_family,q]^2, using the same coordinates/times and fixed
+TRAIN-fitted s=max(fitted std,1e-3). No per-case or prediction variance denominator.
+Physical MSE=e*s^2; group RMSE=sqrt(group MSE). Existing uniform_domain_normalized_mse
+averages cases equally and active quantities equally per case; M1 uses t=0 only,
+others equal initial/fixed-target weights. This is not uniform space-time error.
+Explicit balanced_family_normalized_mse averages families equally, quantities
+equally within each family and cases equally per quantity. Joint weights are
+heat/u=.5, wave/u=.25, wave/v=.25. Physical u/v aggregates mix quantity units and
+must be interpreted alongside their separate errors. Constant-baseline gates keep
+the existing uniform-domain normalized metric, never compare RB loss to an MSE
+baseline. Whole-domain validation queries exclude additional region-supervision
+queries; field-training losses and all their reductions are unchanged.
+
+The rolling training mean is the mean of the last N finite successful-update
+objectives. E[L|family] uses the sum of actual detached per-example contributions
+and their counts in that same successful-update window. It is not the mean of
+microbatch means. Failed/skipped attempts remain reported but do not contribute.
+No arbitrary quantity split of a shared state/flow objective is introduced. Full
+protocol, observation/noise/query identities, counts and numerical caveats:
+mesh-convergence.md.

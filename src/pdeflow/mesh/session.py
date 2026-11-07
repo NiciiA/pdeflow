@@ -29,7 +29,7 @@ class MeshSession:
         result=cls(c,Path(local_root)/identifier,Path(persistent_root)/identifier if persistent_root else None,**kwargs);write_json(result.root/'display-name.json',{'name':name});return result
     @classmethod
     def reopen(cls,root,persistent=None,device=None,**kwargs):
-        root=Path(root);record=read_json(root/'session.json');c=MeshConfig(**record['config']).validate()
+        root=Path(root);record=read_json(root/'session.json');c=MeshConfig.from_record(record['config'])
         if record['scientific_source']['sha256']!=scientific_source()['sha256']:raise ValueError('Reload this run original source ZIP before resuming; no automatic source override')
         if device:c=replace(c,runtime={**c.runtime,'device':device})
         return cls(c,root,persistent,**kwargs)
@@ -77,7 +77,8 @@ class MeshSession:
         with nullcontext() if owned else run_lock(self.root):
             reporter=Reporter(self.root,self.c,self.c.kind['stages'][0],callback=progress);reporter.update('initialization',force=True)
             manifest=self.root/'session.json';old=read_json(manifest) if manifest.exists() else {}
-            if old and model_contract(MeshConfig(**old['config']).validate())!=model_contract(self.c):raise ValueError('Incompatible session configuration; use a NEW experiment')
+            if old and (old['config'].get('validation_every',10)!=self.c.validation_every or old['config'].get('validation_cases',2)!=self.c.validation_cases):raise ValueError('Resume preserves recorded validation_every; use a NEW run for changed validation cadence')
+            if old and model_contract(MeshConfig.from_record(old['config']))!=model_contract(self.c):raise ValueError('Incompatible session configuration; use a NEW experiment')
             if old and old['config']['budgets']!=self.c.budgets and not extend:raise ValueError('Changing budgets requires explicit session.extend(stage, additional)')
             if old and old['scientific_source']['sha256']!=scientific_source()['sha256']:raise ValueError('Changed mesh source; reload the saved source before resume')
             if max(self.c.budgets[s] for s in self.c.kind['stages'])>20:

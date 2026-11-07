@@ -138,7 +138,7 @@ def replay_failure(path,device='cpu'):
     from pdeflow.coordinate.optimization import precision
     root=Path(path)
     if (root/'latest.json').exists():root=root/__import__('pdeflow.runtime',fromlist=['read_json']).read_json(root/'latest.json')['directory']
-    payload=torch.load(root/'replay.pt',map_location='cpu',weights_only=True);context=payload['context'];c=MeshConfig(**context['config']).validate()
+    payload=torch.load(root/'replay.pt',map_location='cpu',weights_only=True);context=payload['context'];c=MeshConfig.from_record(context['config'])
     if context['source']['sha256']!=scientific_source()['sha256']:raise ValueError('Replay requires the captured scientific source; do not bypass source compatibility')
     from pdeflow.runtime import RuntimeSpec
     resolved,_=RuntimeSpec(device=device).resolve();policy,amp=precision(c.precision,resolved);model=MeshModel(c).to(resolved);model.load_state_dict(payload['model'],strict=True);ownership(model,context['stage']);batch=Batch(**payload['batch']).to(resolved)

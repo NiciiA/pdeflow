@@ -8,7 +8,7 @@ from .provenance import read_checkpoint
 
 
 def export(root):
-    root=Path(root);session=read_json(root/'session.json');c=__import__('pdeflow.mesh.contracts',fromlist=['MeshConfig']).MeshConfig(**session['config']).validate();path=root/'stages'/c.kind['stages'][-1]/'resume.pt'
+    root=Path(root);session=read_json(root/'session.json');c=__import__('pdeflow.mesh.contracts',fromlist=['MeshConfig']).MeshConfig.from_record(session['config']);path=root/'stages'/c.kind['stages'][-1]/'resume.pt'
     if not path.exists():return None
     cp,_=read_checkpoint(path)
     if not cp['inference_ready']:return None

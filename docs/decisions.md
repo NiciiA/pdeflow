@@ -1058,3 +1058,25 @@ warmup and changed the cosine horizon. Use a distinct disposable successful-upda
 limit with original config/schedule instead. Profile every actual candidate stage
 and FGN draw without changing coverage; measure GPU memory rather than infer fit
 from host RAM. Preserve failed candidate tracebacks and never auto-apply a winner.
+
+
+### 2026-11-07 — Extend current mesh convergence reporting
+
+Reuse validation_every (250 for NEW runs), add training_smoothing_window (100),
+and keep checkpoint/Drive/live-refresh policies independent. balanced_v2 explicitly
+records two cases per enabled family by default, independent of training batch;
+recorded-config loaders preserve legacy_v1 and old explicit cadence (historical
+plain default10 if absent). Initial/scheduled/final validation has exact state
+identity/deduplication; resume restores compatible history. Model/source resume
+remains strict. No architecture, objective, gradient reduction, optimizer, sampler,
+training-distribution or gate/selection rule changes.
+
+The original display could lose its last validation: 500-update Colab intervals
+exceeded the200-row raw plot window, and training/validation shared an unsuitable
+axis. Add a compact full-stage validation index and separate panels to the existing
+monitor; retain actual attempt progress/ETA/throughput/errors. Cache a bounded
+reference-only held-out cohort and explicit evaluation seeds, restore modes/RNG,
+and preserve individual evaluation JSONs. Family training summaries are actual
+per-example loss sums/counts, with unavailable historical breakdowns unfilled.
+Use fixed TRAIN scales for normalized metrics; retain the old aggregate formula
+and add explicitly named equal-family metrics. See mesh-convergence.md.

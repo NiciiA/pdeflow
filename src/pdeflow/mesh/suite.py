@@ -43,7 +43,7 @@ class Suite:
                 from pdeflow.colab import Session
                 session=Session(record['plan']['legacy_config'],'legacy_factorized_v2',self.root/'runs',self.root/'unused-store',allow_cpu_check=True,persistence_enabled=False);reports[name]=session.preflight(updates,warmup)
             else:
-                session=MeshSession(MeshConfig(**record['plan']['configs'][name]),self.root/'runs'/name);reports[name]=session.preflight(updates,warmup)
+                session=MeshSession(MeshConfig.from_record(record['plan']['configs'][name]),self.root/'runs'/name);reports[name]=session.preflight(updates,warmup)
         write_json(self.root/'profiles.json',{**(read_json(self.root/'profiles.json') if (self.root/'profiles.json').exists() else {}),**reports});self.sync('preflight');return reports
     def run(self,selected=None):
         with run_lock(self.root):
@@ -65,7 +65,7 @@ class Suite:
                         from pdeflow.colab import Session
                         session=Session(record['plan']['legacy_config'],name,self.root/'runs',self.root/'unused-store',allow_cpu_check=True,persistence_enabled=False);outcome=session.run(mode='resume' if (session.root/'session.json').exists() else 'new',override_gate=False);session.finalize()
                     else:
-                        c=MeshConfig(**record['plan']['configs'][name]).validate();session=MeshSession(c,self.root/'runs'/name)
+                        c=MeshConfig.from_record(record['plan']['configs'][name]);session=MeshSession(c,self.root/'runs'/name)
                         if not (session.root/'source/source.zip').exists():
                             (session.root/'source').mkdir(exist_ok=True);shutil.copy2(self.root/'source/source.zip',session.root/'source/source.zip');shutil.copy2(self.root/'source/identity.json',session.root/'source/identity.json')
                         if max(c.budgets[s] for s in c.kind['stages'])>20:

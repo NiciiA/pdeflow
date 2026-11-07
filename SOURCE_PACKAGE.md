@@ -1,5 +1,14 @@
 # PDEFlow mesh-family source package
 
+Current convergence release (2026-11-07): docs/mesh-convergence.md describes
+NEW-run validation_every=250, initial/final validation, successful-window smoothing
+and separate fixed heat/wave quantity plots in the existing live/read-only monitor.
+Notebook step3 exposes cadence/window; step5 uses the same read-only renderer.
+Existing scientific runs require their recorded source/settings for resume; no
+source override or historical metric migration is introduced. Current delivery:
+outputs/mesh-convergence-20261107/pdeflow-mesh-convergence-20261107.zip with adjacent
+.sha256 and colab.ipynb, intentionally excluded from the archive itself.
+
 ## Current mesh controls release — 2026-11-03
 
 See docs/mesh-training-controls.md for visible LR/effective batch/GPU microbatch,

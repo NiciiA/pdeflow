@@ -670,3 +670,20 @@ and stochastic batch4/micro3/LR1e-4. These checks test wiring, not learning qual
 No controlled LR or accuracy experiment was launched. Future experiments must
 fix capacity/objective/data/seed and explicitly choose keep_updates vs keep_examples;
 those answer different questions. CUDA/Colab execution remains unverified.
+
+
+### 2026-11-07 — Convergence measurement verification only
+
+No accuracy experiment or substantial training. A real UI M2 pipeline run,
+CPU FP32, heat/wave, effective batch3/micro2/Q8, five updates, interval2/window2
+recorded fixed validation at0/2/4/5. Latest normalized aggregate1.19733, best
+recorded1.05848 at4. Latest normalized heat/u1.53310, wave/u1.26357, wave/v.45956;
+physical MSE .112171/.497605/.558576 respectively, each2cases/32points. Fixed TRAIN
+quantity scales differ, so these raw physical numbers are not interchangeable.
+This tiny model's reconstruction remains poor; the curve is wiring evidence.
+Last-two-successful-update objective mean1.22163; E[L|heat]2.27243 over2examples,
+E[L|wave].696232 over4examples. These are actual detached objective contributions,
+not per-quantity training losses. A separate bounded CPU frequency-invariance check
+produced bitwise-identical weights/losses. Full evidence/protocol definitions:
+outputs/mesh-convergence-20261107 and mesh-convergence.md. No CUDA/MPS/Colab
+execution or convergence/accuracy benefit from scientific changes is claimed.

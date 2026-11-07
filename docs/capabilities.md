@@ -472,3 +472,18 @@ Evidence and exact recovery procedures: mesh-training-recovery.md.
 | Learning-rate1e-4 accuracy/stability benefit | Unestablished; new-run experiment only |
 
 See mesh-training-controls.md for exact local/Colab commands and source transition.
+
+
+### Mesh convergence (2026-11-07)
+
+| Capability | Actual evidence/status |
+|---|---|
+| Initial/250-successful/final fixed validation, deduplicated | Implemented; shortened-interval CPU skip/resume checks, real browser0/2/4/5 |
+| Heat u / wave u / wave v physical MSE/RMSE and fixed-scale normalized MSE | Real fixed-seed CPU generative validation, balanced new cohort, persisted specification |
+| Rolling objective and family-conditioned sums/counts | Real per-example losses; unequal/partial microbatch checks, skipped attempts excluded |
+| Full-stage validation and separate objective panels | Real IPython live markers before return; rendered UI and read-only monitor |
+| Legacy/status/store/suite reporting | Read-only and suite association checks; missing groups/timestamps remain unavailable |
+| Improved model accuracy / convergence | Not demonstrated; these are measurement/display changes |
+| CUDA/MPS/actual Colab execution of this revision | Not executed; CPU fresh-source notebook execution is separate evidence |
+
+Configuration, formulas, commands and limits: mesh-convergence.md.

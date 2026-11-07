@@ -12,6 +12,7 @@ export type Series = {
   color: string;
   points: { x: number; y: number }[];
   dashed?: boolean;
+  opacity?: number;
 };
 export function LineChart({
   title,
@@ -56,10 +57,18 @@ export function LineChart({
               fill="none"
               stroke={s.color}
               strokeWidth="2"
+              strokeOpacity={s.opacity}
               strokeDasharray={s.dashed ? "5 4" : undefined}
             />
             {s.points.map((p, i) => (
-              <circle key={i} cx={px(p.x)} cy={py(p.y)} r="2.4" fill={s.color}>
+              <circle
+                key={i}
+                cx={px(p.x)}
+                cy={py(p.y)}
+                r="2.4"
+                fill={s.color}
+                opacity={s.opacity}
+              >
                 <title>{`${s.name}: ${xlabel}=${p.x}, value=${p.y}`}</title>
               </circle>
             ))}

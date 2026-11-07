@@ -4,7 +4,8 @@ import type { Problem } from "./types";
 import type { TrainingSelection } from "./TrainModel";
 import { FieldLossControls } from "./FieldLossControls";
 import { HeatCanvas } from "./HeatCanvas";
-import { LineChart } from "./ScienceCharts";
+import { MeshConvergence } from "./MeshConvergence";
+import type { MeshConvergenceRecord } from "./MeshConvergence";
 
 const meshModels: Record<string, string> = {
   mesh_m1_v1: "M1 · Deterministic initial-state mesh — recommended first",
@@ -88,6 +89,7 @@ type Preview = {
   };
 };
 type Run = {
+  convergence?: MeshConvergenceRecord;
   id: string;
   state: string;
   stage: string;
@@ -135,6 +137,8 @@ export function MeshTraining({
     [batch, setBatch] = useState(8),
     [micro, setMicro] = useState(8),
     [loss, setLoss] = useState<Record<string, unknown>>({ type: "mse" }),
+    [validationEvery, setValidationEvery] = useState(250),
+    [smoothingWindow, setSmoothingWindow] = useState(100),
     [advanced, setAdvanced] = useState("{}"),
     [draft, setDraft] = useState("{}"),
     [previewRecord, setPreview] = useState<{
@@ -159,6 +163,8 @@ export function MeshTraining({
       advanced: {
         ...JSON.parse(advanced || "{}"),
         capacity,
+        validation_every: validationEvery,
+        training_smoothing_window: smoothingWindow,
         learning_rate: learningRate,
         batch_policy: batchPolicy,
         stage_settings: stageSettings,
@@ -180,6 +186,8 @@ export function MeshTraining({
       stageSettings,
       loss,
       advanced,
+      validationEvery,
+      smoothingWindow,
     ],
   );
   const run = runs.find((r) => r.id === selected);
@@ -481,6 +489,36 @@ export function MeshTraining({
       )}
       <details>
         <summary>Advanced model and per-stage settings</summary>
+        <div className="number-grid">
+          <label>
+            Fixed validation interval
+            <input
+              type="number"
+              min={1}
+              aria-label="Mesh validation interval"
+              value={validationEvery}
+              onChange={(e) => setValidationEvery(e.target.valueAsNumber)}
+            />
+          </label>
+          <label>
+            Training smoothing window
+            <input
+              type="number"
+              min={1}
+              max={2000}
+              aria-label="Mesh training smoothing window"
+              value={smoothingWindow}
+              onChange={(e) => setSmoothingWindow(e.target.valueAsNumber)}
+            />
+          </label>
+        </div>
+        <p>
+          Validation every {validationEvery} successful updates, plus
+          initial/final evaluations without duplication. Rolling mean uses{" "}
+          {smoothingWindow} successful updates. Checkpoint/Drive and live
+          refresh intervals are independent. New runs only; Resume retains
+          recorded cadence.
+        </p>
         <p>
           Optional per-stage overrides. Unchecked stages inherit the controls
           above. Optional stage schedules and warmup are explicit
@@ -608,6 +646,8 @@ export function MeshTraining({
                 "stage_settings",
                 "batch_policy",
                 "batch_reference",
+                "validation_every",
+                "training_smoothing_window",
                 "capacity",
                 "field_loss",
               ])
@@ -791,38 +831,17 @@ export function MeshTraining({
           </p>
           {run.error && <p role="alert">{run.error}</p>}
           {run.warning && <p>{run.warning}</p>}
-          {run.history.length > 0 && (
-            <>
-              <LineChart
-                title="Current stage objective — not comparable across candidate families"
-                xlabel="Successful update"
-                ylabel="Objective"
-                series={[
-                  {
-                    name: "Training objective",
-                    points: run.history.map((r) => ({
-                      x: r.step,
-                      y: r.training_loss,
-                    })),
-                    color: "#247b75",
-                  },
-                  {
-                    name: "Uniform validation MSE",
-                    points: run.history
-                      .filter((r) => r.validation_loss != null)
-                      .map((r) => ({ x: r.step, y: r.validation_loss! })),
-                    color: "#cc7040",
-                  },
-                ]}
-              />
-              <details>
-                <summary>Separate objective components</summary>
-                <pre>
-                  {JSON.stringify(run.history.at(-1)?.components, null, 2)}
-                </pre>
-              </details>
-            </>
+          {run.convergence ? (
+            <MeshConvergence record={run.convergence} />
+          ) : (
+            <MeshConvergence
+              record={{ history: run.history, stage: run.stage }}
+            />
           )}
+          <details>
+            <summary>Existing objective components</summary>
+            <pre>{JSON.stringify(run.history.at(-1)?.components, null, 2)}</pre>
+          </details>
           {preview && (
             <details open>
               <summary>

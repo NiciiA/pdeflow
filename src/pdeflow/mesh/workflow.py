@@ -12,7 +12,7 @@ def plan(request):
     architecture=request.get('model','mesh_m1_v1');budget=request.get('budget','pipeline-check');problem=request.get('problem','heat-wave-2d');advanced=dict(request.get('advanced') or {})
     if architecture not in CANDIDATES or budget not in BUDGETS or problem not in ('heat-2d','wave-2d','heat-wave-2d'):raise ValueError('Choose a supported mesh candidate, heat/wave family and budget')
     capacity=advanced.pop('capacity','pipeline-check' if budget=='pipeline-check' else 'xsmall');device,_=RuntimeSpec(device=request.get('device','auto')).resolve();c=preset(capacity,architecture,str(device),'auto');weights={'heat':.5,'wave':.5} if problem=='heat-wave-2d' else {problem.split('-')[0]:1.};updates=2 if budget=='pipeline-check' else 500 if budget=='development' else 10000
-    raw=c.to_dict();raw.update(family_weights=weights,budgets={s:updates for s in c.budgets},pipeline_check=budget=='pipeline-check',checkpoint_every=min(50,updates),validation_every=min(50,updates))
+    raw=c.to_dict();raw.update(family_weights=weights,budgets={s:updates for s in c.budgets},pipeline_check=budget=='pipeline-check',checkpoint_every=min(50,updates))
     if budget=='development':raw['data']={**raw['data'],'train_count':256,'validation_count':24,'test_count':24}
     settings={k:advanced.pop(k) for k in ('learning_rate','batch_size','microbatch','stage_settings','batch_policy') if k in advanced}
     if any(settings.get(k,'absent') is None for k in ('learning_rate','batch_size','microbatch')):raise ValueError('Learning rate, effective batch and microbatch cannot be empty; enter explicit valid settings')
@@ -31,7 +31,7 @@ def plan(request):
 
 
 def execute(path,record,event=None):
-    config=MeshConfig(**record['plan']['config']).validate();session=MeshSession(config,path,save_updates=config.checkpoint_every)
+    config=MeshConfig.from_record(record['plan']['config']);session=MeshSession(config,path,save_updates=config.checkpoint_every)
     cached=Path(record['workspace'])/'mesh-profiles'/(__import__('pdeflow.runtime',fromlist=['digest']).digest(config.to_dict())+'.json')
     if cached.exists() and not (session.root/'profile.json').exists():__import__('shutil').copy2(cached,session.root/'profile.json')
     outcome=session.run(owned=True,event=event,extend=record.get('mesh_extend',False));artifact=session.finalize();return outcome,artifact
@@ -45,7 +45,7 @@ def list_models(workspace=None,problem=None):
     result=[]
     for entry in runs(workspace):
         if not entry['available']:continue
-        c=MeshConfig(**entry['config']).validate();family=problem.family if problem and problem.family in c.family_weights else next(iter(c.family_weights));r=c.reference_config();bounds=r.diffusivity_range if family=='heat' else r.wave_speed_range;physical=physical_problem(data_config(r).grid,family,sum(bounds)/2);reason='No current problem';valid=False
+        c=MeshConfig.from_record(entry['config']);family=problem.family if problem and problem.family in c.family_weights else next(iter(c.family_weights));r=c.reference_config();bounds=r.diffusivity_range if family=='heat' else r.wave_speed_range;physical=physical_problem(data_config(r).grid,family,sum(bounds)/2);reason='No current problem';valid=False
         if problem:
             try:compatible(c,problem);valid=True;reason='Physical support matches; M1 is initial-only' if not c.kind['trajectory'] else 'Physical support matches; accuracy unestablished'
             except ValueError as error:reason=str(error)

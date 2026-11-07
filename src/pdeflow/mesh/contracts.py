@@ -50,8 +50,10 @@ class MeshConfig:
     batch_policy:str='keep_updates'
     batch_reference:dict=field(default_factory=dict)
     checkpoint_every:int=10
-    validation_every:int=10
+    validation_every:int=250
     validation_cases:int=2
+    validation_protocol:str='balanced_v2'
+    training_smoothing_window:int=100
     gate_ratio:float=1.
     seed:int=73
     runtime:dict=field(default_factory=lambda:{'device':'cpu','dtype':'float32','threads':2})
@@ -62,6 +64,11 @@ class MeshConfig:
     warm_start:dict=field(default_factory=dict)
     freeze_dynamics:bool=True
     pipeline_check:bool=True
+
+    @classmethod
+    def from_record(cls,values):
+        # Historical serialized configs always retain their explicit cadence.
+        return cls(**{'validation_every':10,'validation_protocol':'legacy_v1',**values}).validate()
 
     @property
     def kind(self):return CANDIDATES[self.architecture]
@@ -96,6 +103,9 @@ class MeshConfig:
         if set(self.corruption)-{'missing_probability','quantity_dropout','time_dropout'} or any(not 0<=v<1 for v in self.corruption.values()):raise ValueError('Corruption probabilities must be in[0,1)')
         if self.sampler.get('solver') not in ('euler','heun') or set(self.sampler)!={'steps','solver','diffusion_steps','eta'} or not 1<=self.sampler['steps']<=512 or not 8<=self.sampler['diffusion_steps']<=4096 or self.sampler['eta']!=0:raise ValueError('Mesh v1 supports Euler/Heun FM and deterministic eta=0 DDIM; explicit bounded steps required')
         if not self.kind['trajectory'] and any(self.objective.get(k,0)>0 for k in ('heat','heat_mean','heat_dissipation','kinematic','acceleration','observation')):raise ValueError('M1 is initial-only; later-time likelihood/physics requires M2–M5')
+        if self.validation_protocol not in ('legacy_v1','balanced_v2'):raise ValueError('Unsupported mesh validation protocol')
+        if type(self.training_smoothing_window)!=int or not 1<=self.training_smoothing_window<=2000:raise ValueError('Training smoothing window must be 1..2000 successful updates')
+        if self.validation_protocol=='balanced_v2' and self.validation_cases>16:raise ValueError('Balanced validation is bounded to 1..16 cases per enabled family')
         self.reference_config()
         return self
 
@@ -106,7 +116,7 @@ def preset(capacity='pipeline-check',architecture='mesh_m1_v1',device='cpu',prec
     w,d,h,n,c,g=LADDER[capacity];small=capacity=='pipeline-check'
     data={} if small else {'reference_shape':(32,32),'encoder_points':512,'query_points':256,'train_count':8192,'validation_count':256,'test_count':256,'observation_counts':(1,64),'distribution':{'max_wave':4,'width':[.1,.2]}}
     updates=2 if small else 10000 if capacity in ('xsmall','small','medium') else 100000
-    cfg=MeshConfig(architecture=architecture,capacity=capacity,width=w,depth=d,heads=h,node_shape=n,coarse_shape=c,global_tokens=g,data=data,budgets={k:updates for k in MeshConfig().budgets},runtime={'device':device,'dtype':'float32','threads':2},precision=precision,checkpoint_every=1 if small else 500,validation_every=1 if small else 500,pipeline_check=small,batch_size=2 if small else 8,microbatch=2 if small else 8)
+    cfg=MeshConfig(architecture=architecture,capacity=capacity,width=w,depth=d,heads=h,node_shape=n,coarse_shape=c,global_tokens=g,data=data,budgets={k:updates for k in MeshConfig().budgets},runtime={'device':device,'dtype':'float32','threads':2},precision=precision,checkpoint_every=1 if small else 500,validation_every=250,validation_protocol='balanced_v2',pipeline_check=small,batch_size=2 if small else 8,microbatch=2 if small else 8)
     raw=cfg.to_dict()
     for k,v in (overrides or {}).items():
         if k not in raw:raise ValueError('Unknown mesh configuration '+k)
@@ -118,7 +128,7 @@ def model_contract(c):
     # JSON persists tuples as lists; compare the serialized scientific contract.
     import json
     values={k:v for k,v in c.to_dict().items() if k not in ('runtime','budgets','checkpoint_every','validation_every','validation_cases','pipeline_check')}
-    for key,default in (('stage_settings',{}),('batch_policy','keep_updates'),('batch_reference',{})):
+    for key,default in (('stage_settings',{}),('batch_policy','keep_updates'),('batch_reference',{}),('validation_protocol','legacy_v1'),('training_smoothing_window',100)):
         if values[key]==default:values.pop(key)
     return json.loads(json.dumps(values,sort_keys=True))
 

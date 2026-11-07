@@ -49,6 +49,8 @@ def train_stage(config,root,stage,dependency=None,resume=False,stop_after=None,s
     c=(config if isinstance(config,MeshConfig) else MeshConfig(**config)).validate();root=Path(root).resolve();path=root/'stages'/stage
     if stage not in c.kind['stages']:raise ValueError('Stage does not belong to this architecture')
     from .settings import resolved
+    from .convergence import family_contributions,success_rows,compact,training_summary,validation_summary
+    from collections import deque
     settings=resolved(c,stage);batch_size=settings['effective_batch'];microbatch=settings['microbatch'];opt=settings['optimizer']
     if benchmark_updates is not None and (resume or type(benchmark_updates)!=int or not 1<=benchmark_updates<=32):raise ValueError('Disposable benchmark requires 1..32 successful updates and cannot resume')
     path.mkdir(parents=True,exist_ok=True);reporter=Reporter(root,c,stage,progress);reporter.update('initialization',force=True);source=scientific_source();device,_=RuntimeSpec(**c.runtime).resolve();policy,amp=precision(c.precision,device);autocast=lambda:torch.autocast(device.type,dtype=amp) if policy!='fp32' else nullcontext()
@@ -61,6 +63,7 @@ def train_stage(config,root,stage,dependency=None,resume=False,stop_after=None,s
             if not health['healthy']:raise ValueError('Saved model/optimizer is nonfinite; select an earlier verified healthy snapshot, never resume this state')
             old,prior=read_checkpoint(path/'resume.pt')
             if old.get('precision',policy)!=policy:raise ValueError('Resolved autocast policy differs from recorded checkpoint; use the same device/precision policy, not a silent precision fallback')
+            if prior.validation_every!=c.validation_every or prior.validation_cases!=c.validation_cases:raise ValueError('Resume preserves the recorded validation_every; use a NEW run to change validation cadence')
             if model_contract(prior)!=model_contract(c):raise ValueError('Incompatible mesh architecture/objective/data/observation change on resume; start a new experiment')
             if old['scientific_source']['sha256']!=source['sha256']:raise ValueError('Mesh scientific source changed; reload recorded source before resume')
             if prior.budgets[stage]!=total and not (extend and total>prior.budgets[stage]):raise ValueError('Changed budget requires deliberate extension')
@@ -89,16 +92,37 @@ def train_stage(config,root,stage,dependency=None,resume=False,stop_after=None,s
         if device.type=='cuda':torch.cuda.reset_peak_memory_stats(device)
         record={'kind':'mesh_stage_run','architecture':c.architecture,'stage':stage,'config':c.to_dict(),'config_identity':digest(c.to_dict()),'resolved_training_settings':settings,'scientific_source':source,'dataset_identity':data.dataset.metadata['sha256'],'state':'running','pid':os.getpid(),'progress':step,'budget':total,'ownership':owned,'precision':policy,'autocast_dtype':str(amp),'parameter_dtype':'float32','scaler_enabled':policy=='fp16','numerical_policy':'mesh_fp32_products_and_reductions_v1','dependency':dep,'setup_seconds':setup,'parameters':sum(p.numel() for p in model.parameters()),'scope':'Physical decoded targets; no full-state encoder/AE latent targets','fixed_subset_diagnostic':fixed_subset}
         print('Resolved mesh optimizer/batch:',stage,__import__('json').dumps(settings),flush=True)
-        write_json(path/'run.json',record);last_validation=None;batch=None;draws=None;rng=None;pending_attempt=False
+        write_json(path/'run.json',record);last_validation=(old or {}).get('validation');batch=None;draws=None;rng=None;pending_attempt=False
         reporter.update('training',force=True,successful_updates=step,attempted_updates=attempted,skipped_updates=skipped_total,failed_attempts=failed_total,setup_seconds=setup)
         if event:event({'stage':stage,'record':record,'path':str(path),'initialization':True})
+        convergence_history=deque([compact(r) for r in success_rows((old or {}).get('convergence_history',history))],maxlen=c.training_smoothing_window+200)
+        validation_history=list((old or {}).get('validation_history',[]))
+        reporter.restore(history,list(convergence_history),validation_history)
+        def evaluate_at(reason):
+            nonlocal last_validation
+            model_sha=tensor_digest(model);identifier=digest({'stage':stage,'update':step,'model':model_sha,'protocol':c.validation_protocol,'cases':c.validation_cases})
+            file=path/f'validation-update-{step:09d}-{identifier[:16]}.json'
+            reporter.update('validation',force=True,successful_updates=step)
+            if file.exists():
+                result=read_json(file)
+                if result.get('validation_id')!=identifier:raise ValueError('Validation record identity mismatch; never overwrite it')
+                seconds=0.
+            else:
+                tick=time.perf_counter();result=validate(model,data,stage,preview_root=path,update=step);seconds=time.perf_counter()-tick
+                result.update(validation_id=identifier,model_state_sha256=model_sha,run_id=root.name,reason=reason,seconds=seconds)
+                write_json(file,result)
+            if not any(r.get('validation_id')==identifier for r in validation_history):validation_history.append(validation_summary(result))
+            last_validation=result
+            write_json(path/'validation-history.json',validation_history);write_json(path/'validation.json',result)
+            reporter.validation(result)
+            return seconds
         def save(completed,continuing=False):
             nonlocal last_validation
             require_finite({'model':model.state_dict(),'optimizer':optimizer.state_dict()},'checkpoint model/optimizer state')
             reporter.update('checkpointing',force=True,successful_updates=step)
             for name,sha in freeze.items():
                 if tensor_digest(getattr(model,name))!=sha:raise RuntimeError('Frozen module changed: '+name)
-            cp={'schema':SCHEMA,'state_contract':'normalized_physical_nodes_u0_v0_log_parameter_v1','architecture':c.architecture,'config':c.to_dict(),'config_identity':digest(c.to_dict()),'resolved_training_settings':settings,'benchmark':{'successful_updates':step if benchmark_updates is not None else None,'scope':'Disposable measurement only; never a production completed stage'} if benchmark_updates is not None else {},'stage':stage,'completed':completed,'inference_ready':benchmark_updates is None and stage==c.kind['stages'][-1] and step>0,'model':{k:v for k,v in model.state_dict().items() if not dep or k.split('.')[0] not in freeze},'model_partial_frozen_modules':list(freeze) if dep else [],'optimizer':optimizer.state_dict(),'scaler':scaler.state_dict(),'scheduler':{'settings':schedule,'completed_updates':step},'generator':g.get_state(),'ambient_rng':capture(),'torch_rng':torch.get_rng_state(),'cuda_rng':torch.cuda.get_rng_state_all() if device.type=='cuda' else [],'successful_updates':step,'attempted_updates':attempted,'skipped_updates':skipped_total,'failed_attempts':failed_total,'overflow_streak':streak,'effective_examples':examples,'counter_semantics':'successful_skipped_failed_v2','normalizations':data.norms,'normalization_fitted_ids':data.dataset.metadata['fitted_ids'],'training_ids':[i for i in data.dataset.metadata['ids'] if i.startswith('train:')],'dataset_identity':data.dataset.metadata['sha256'],'dataset_root':os.path.relpath(root/'data',path),'scientific_source':source,'environment':environment(RuntimeSpec(**c.runtime)),'precision':policy,'autocast_dtype':str(amp),'parameter_dtype':'float32','scaler_enabled':policy=='fp16','numerical_policy':'mesh_fp32_products_and_reductions_v1','history':history[-2000:],'history_total':attempted,'dependency':dep,'ownership':owned,'warm_start':warm,'frozen_hashes':freeze,'validation':last_validation,'capabilities':capabilities(c),'training_seconds':time.perf_counter()-started,'setup_seconds':setup,'noise_and_reference_policy':'Reference/observation seed depends on declared split and successful stage update; candidate order independent. Stochastic generator/scaler/RNG states persisted separately.','sampling':c.sampler,'resolved_field_loss':__import__('dataclasses').asdict(__import__('pdeflow.field_losses',fromlist=['settings']).settings(c.field_loss)),'resolved_reference_configuration':c.reference_config().to_dict(),'training_only_information':'Dynamics stage uses true clean physical initial node values; production generation receives sparse observations and disclosed physics only.'}
+            cp={'schema':SCHEMA,'state_contract':'normalized_physical_nodes_u0_v0_log_parameter_v1','architecture':c.architecture,'config':c.to_dict(),'config_identity':digest(c.to_dict()),'resolved_training_settings':settings,'benchmark':{'successful_updates':step if benchmark_updates is not None else None,'scope':'Disposable measurement only; never a production completed stage'} if benchmark_updates is not None else {},'stage':stage,'completed':completed,'inference_ready':benchmark_updates is None and stage==c.kind['stages'][-1] and step>0,'model':{k:v for k,v in model.state_dict().items() if not dep or k.split('.')[0] not in freeze},'model_partial_frozen_modules':list(freeze) if dep else [],'optimizer':optimizer.state_dict(),'scaler':scaler.state_dict(),'scheduler':{'settings':schedule,'completed_updates':step},'generator':g.get_state(),'ambient_rng':capture(),'torch_rng':torch.get_rng_state(),'cuda_rng':torch.cuda.get_rng_state_all() if device.type=='cuda' else [],'successful_updates':step,'attempted_updates':attempted,'skipped_updates':skipped_total,'failed_attempts':failed_total,'overflow_streak':streak,'effective_examples':examples,'counter_semantics':'successful_skipped_failed_v2','normalizations':data.norms,'normalization_fitted_ids':data.dataset.metadata['fitted_ids'],'training_ids':[i for i in data.dataset.metadata['ids'] if i.startswith('train:')],'dataset_identity':data.dataset.metadata['sha256'],'dataset_root':os.path.relpath(root/'data',path),'scientific_source':source,'environment':environment(RuntimeSpec(**c.runtime)),'precision':policy,'autocast_dtype':str(amp),'parameter_dtype':'float32','scaler_enabled':policy=='fp16','numerical_policy':'mesh_fp32_products_and_reductions_v1','history':history[-2000:],'convergence_history':list(convergence_history),'validation_history':validation_history,'history_total':attempted,'dependency':dep,'ownership':owned,'warm_start':warm,'frozen_hashes':freeze,'validation':last_validation,'capabilities':capabilities(c),'training_seconds':time.perf_counter()-started,'setup_seconds':setup,'noise_and_reference_policy':'Reference/observation seed depends on declared split and successful stage update; candidate order independent. Stochastic generator/scaler/RNG states persisted separately.','sampling':c.sampler,'resolved_field_loss':__import__('dataclasses').asdict(__import__('pdeflow.field_losses',fromlist=['settings']).settings(c.field_loss)),'resolved_reference_configuration':c.reference_config().to_dict(),'training_only_information':'Dynamics stage uses true clean physical initial node values; production generation receives sparse observations and disclosed physics only.'}
             # Keep the immediately preceding validated checkpoint independently.
             if (path/'resume.pt').exists():
                 import shutil
@@ -106,11 +130,12 @@ def train_stage(config,root,stage,dependency=None,resume=False,stop_after=None,s
             atomic_write(path/'resume.pt',lambda f:torch.save(cp,f))
             # Standalone export is built once by the session/export layer. Stage
             # resume references frozen prerequisite modules instead of copying them.
-            record.update(state='completed' if completed else 'running' if continuing else 'interrupted',progress=step,successful_updates=step,attempted_updates=attempted,skipped_updates=skipped_total,effective_examples=examples,history=history[-200:],training_seconds=time.perf_counter()-started,validation=last_validation,memory={'cuda_peak_allocated':torch.cuda.max_memory_allocated(device) if device.type=='cuda' else None,'cuda_peak_reserved':torch.cuda.max_memory_reserved(device) if device.type=='cuda' else None,'mps_current_allocated':torch.mps.current_allocated_memory() if device.type=='mps' else None,'scope':'CUDA peak; MPS current allocation is not peak'})
+            record.update(state='completed' if completed else 'running' if continuing else 'interrupted',progress=step,successful_updates=step,attempted_updates=attempted,skipped_updates=skipped_total,effective_examples=examples,history=history[-200:],validation_history=validation_history,training_summary=training_summary(list(convergence_history),c.training_smoothing_window),training_seconds=time.perf_counter()-started,validation=last_validation,memory={'cuda_peak_allocated':torch.cuda.max_memory_allocated(device) if device.type=='cuda' else None,'cuda_peak_reserved':torch.cuda.max_memory_reserved(device) if device.type=='cuda' else None,'mps_current_allocated':torch.mps.current_allocated_memory() if device.type=='mps' else None,'scope':'CUDA peak; MPS current allocation is not peak'})
             write_json(path/'history.json',history[-2000:]);write_json(path/'run.json',record)
             if event:event({'stage':stage,'record':record,'path':str(path)})
             return cp
         try:
+            if not old:record['initial_validation_seconds']=evaluate_at('initial')
             while step<limit:
                 if stop[0] or should_stop and should_stop() or stop_after is not None and step>=stop_after:break
                 attempt_started=time.perf_counter();attempted+=1;pending_attempt=True;batch=None;draws=None
@@ -120,7 +145,7 @@ def train_stage(config,root,stage,dependency=None,resume=False,stop_after=None,s
                 noise,s,k,q=draw(c,batch_size,g,device);draws=(noise,s,k,q)
                 require_finite({key:value for key,value in batch.__dict__.items() if torch.is_tensor(value)},'reference targets / queries / physical inputs')
                 points,features,valid,quantities=batch.observations;require_finite((points[valid],features[valid]),'valid observations')
-                transfer_seconds=time.perf_counter()-tick;synchronize(device);update_started=time.perf_counter();optimizer.zero_grad(set_to_none=True);parts={};objective=0.;lr=schedule['learning_rate'];warmup=schedule['warmup']
+                transfer_seconds=time.perf_counter()-tick;synchronize(device);update_started=time.perf_counter();optimizer.zero_grad(set_to_none=True);parts={};family_objective=None;objective=0.;lr=schedule['learning_rate'];warmup=schedule['warmup']
                 if warmup and step<warmup:lr*=float(step+1)/warmup
                 elif schedule['schedule']=='cosine':
                     phase=min(1.,max(0.,(step-warmup)/max(1,schedule['horizon']-warmup)));lr*=schedule['minimum_ratio']+(1-schedule['minimum_ratio'])*(1+math.cos(math.pi*phase))/2
@@ -132,6 +157,7 @@ def train_stage(config,root,stage,dependency=None,resume=False,stop_after=None,s
                     with autocast():values,components=loss(model,part,stage,data.norms,slice_noise(noise,start,end),s[start:end],k[start:end],q[start:end])
                     require_finite({'objective':values,'components':components},'forward objective/components before backward')
                     scaler.scale(values.float().sum()/batch_size).backward();objective+=float(values.detach().float().sum())/batch_size
+                    family_objective=family_contributions(values.detach().float().cpu().tolist(),part.families.detach().cpu().tolist(),family_objective)
                     for key,value in components.items():parts[key]=parts.get(key,0.)+float(value.detach().float().sum())/batch_size
                 if not math.isfinite(objective):raise FloatingPointError('Nonfinite mesh objective; optimizer not stepped')
                 grad,finite,skipped=optimizer_step(optimizer,scaler,parameters,opt.get('clip',10.),policy)
@@ -139,11 +165,13 @@ def train_stage(config,root,stage,dependency=None,resume=False,stop_after=None,s
                 synchronize(device);compute_seconds=time.perf_counter()-update_started;pending_attempt=False
                 if finite:step+=1;examples+=batch_size;streak=0
                 else:skipped_total+=1;streak+=1
-                row={'step':step,'attempted_update':attempted,'skipped_updates':skipped_total,'failed_attempts':failed_total,'training_loss':objective,'components':parts,'learning_rate':lr,'gradients_finite':finite,'gradient_norm':float(grad) if finite else None,'optimizer_update_skipped':not finite,'scaler_scale':scaler.get_scale(),'successful_updates':step,'effective_examples':examples,'family_example_counts':{name:int(batch.families.eq(i).sum()) for i,name in enumerate(('heat','wave'))},'actual_forward_microbatch':min(microbatch,batch_size),'effective_batch':batch_size,'forward_microbatches':math.ceil(batch_size/microbatch),'reference_host_seconds':reference_seconds,'transfer_enqueue_host_seconds':transfer_seconds,'synchronized_compute_update_seconds':compute_seconds,'gpu_forward_backward_optimizer_ms':gpu_start.elapsed_time(gpu_end) if gpu_start is not None else None,'step_seconds':reference_seconds+transfer_seconds+compute_seconds,'timing_scope':'Per-attempt synchronized wall time; validation/persistence separate. GPU events only at profiling boundaries.','physical_target_times':batch.times.detach().cpu().tolist(),'observation_times_minmax':[[float(x[:,2].min()),float(x[:,2].max())] if len(x) else [] for x in [points[valid] for points,valid in zip(batch.observations[0].detach().cpu(),batch.observations[2].detach().cpu())]]}
+                row={'step':step,'attempted_update':attempted,'skipped_updates':skipped_total,'failed_attempts':failed_total,'training_loss':objective,'family_objective':family_objective,'components':parts,'learning_rate':lr,'gradients_finite':finite,'gradient_norm':float(grad) if finite else None,'optimizer_update_skipped':not finite,'scaler_scale':scaler.get_scale(),'successful_updates':step,'effective_examples':examples,'family_example_counts':{name:int(batch.families.eq(i).sum()) for i,name in enumerate(('heat','wave'))},'actual_forward_microbatch':min(microbatch,batch_size),'effective_batch':batch_size,'forward_microbatches':math.ceil(batch_size/microbatch),'reference_host_seconds':reference_seconds,'transfer_enqueue_host_seconds':transfer_seconds,'synchronized_compute_update_seconds':compute_seconds,'gpu_forward_backward_optimizer_ms':gpu_start.elapsed_time(gpu_end) if gpu_start is not None else None,'step_seconds':reference_seconds+transfer_seconds+compute_seconds,'timing_scope':'Per-attempt synchronized wall time; validation/persistence separate. GPU events only at profiling boundaries.','physical_target_times':batch.times.detach().cpu().tolist(),'observation_times_minmax':[[float(x[:,2].min()),float(x[:,2].max())] if len(x) else [] for x in [points[valid] for points,valid in zip(batch.observations[0].detach().cpu(),batch.observations[2].detach().cpu())]]}
+                if finite:
+                    convergence_history.append(compact(row))
+                    row['rolling_training_objective']=training_summary(list(convergence_history),c.training_smoothing_window)
                 if not finite:row['overflow_diagnostics']=gradient_diagnostics(model.named_parameters())
                 if finite and (step==limit if benchmark_updates is not None else step%c.validation_every==0 or step==total):
-                    reporter.update('validation',force=True,successful_updates=step)
-                    tick=time.perf_counter();last_validation=validate(model,data,stage,preview_root=path,update=step);row['validation_seconds']=time.perf_counter()-tick;row['validation_loss']=last_validation['uniform_domain_normalized_mse'];write_json(path/'validation.json',last_validation)
+                    row['validation_seconds']=evaluate_at('final' if step==total or benchmark_updates is not None else 'scheduled');row['validation_loss']=last_validation['uniform_domain_normalized_mse']
                 history.append(row)
                 import json
                 with (path/'history-live.jsonl').open('a') as journal:journal.write(json.dumps(row,allow_nan=False)+'\n')
@@ -152,7 +180,9 @@ def train_stage(config,root,stage,dependency=None,resume=False,stop_after=None,s
                 reporter.row(row)
                 row['end_to_end_seconds']=time.perf_counter()-attempt_started
                 if streak>=opt.get('max_consecutive_overflows',8):raise FloatingPointError('Persistent nonfinite FP16 gradients after bounded scaler recovery; inspect overflow diagnostics')
-            completed=benchmark_updates is None and step>=total;save(completed);reporter.update('completed' if completed else 'interrupted',force=True,successful_updates=step,attempted_updates=attempted,skipped_updates=skipped_total,failed_attempts=failed_total)
+            completed=benchmark_updates is None and step>=total
+            if completed and (last_validation or {}).get('update')!=step:evaluate_at('final')
+            save(completed);reporter.update('completed' if completed else 'interrupted',force=True,successful_updates=step,attempted_updates=attempted,skipped_updates=skipped_total,failed_attempts=failed_total)
             return record
         except BaseException as error:
             import traceback
